@@ -6,7 +6,7 @@ import json
 from typing import Any, Dict, List
 
 
-def _style_block(interview_style: str, target_role: str) -> str:
+def _style_block(interview_style: str, target_role: str, *, skill_phase: bool = False) -> str:
     if interview_style == "behavioral":
         return (
             f"This is an HR / people-operations interview for {target_role}.\n"
@@ -16,12 +16,25 @@ def _style_block(interview_style: str, target_role: str) -> str:
             "GOOD: 'When the hiring manager wanted to skip the take-home, what did you say, and what happened next?'\n"
             "BAD: 'Can you tell me more about that?'"
         )
+    if skill_phase:
+        return (
+            f"This is the SKILLS phase of a technical interview for {target_role}.\n"
+            "Projects are over. Ask the planned OOP, DSA, or skill question itself.\n"
+            "Do not mention resume projects. Do not ask how they used this in MoleCheck or any other project.\n"
+            "OOPs = classes, inheritance, polymorphism, encapsulation. "
+            "DSA = arrays, hash maps, stacks, queues, linked lists, time complexity.\n"
+            "CV skills = what the language or library is and how it works, in simple terms.\n"
+            "GOOD: 'What is the difference between compile-time and runtime polymorphism?'\n"
+            "BAD: 'On MoleCheck, how would you put Random Forest into a class hierarchy?'"
+        )
     return (
         f"This is a technical interview for {target_role}.\n"
-        "Probe real implementation, failure modes, trade-offs, and numbers they would actually have seen.\n"
-        "Do not ask textbook definitions. Do not invent libraries they did not name.\n"
-        "GOOD: 'On MoleCheck you used MobileNetV2 — when the classifier drifted, what broke first?'\n"
-        "BAD: 'That's interesting, can you walk me through your project?'"
+        "Ask BASIC technical questions in simple student-level terms.\n"
+        "Ask what they used, what that tool does, how they used it, or why they picked it.\n"
+        "Do not ask about production drift, bottlenecks, rollback, system design, or research-level details.\n"
+        "Do not invent libraries they did not name.\n"
+        "GOOD: 'On MoleCheck you used Keras — what does Keras do there, and which part did you write?'\n"
+        "BAD: 'When the classifier drifted, what broke first and what would make you roll it back?'"
     )
 
 
@@ -61,7 +74,12 @@ def build_interviewer_prompt(
     spec = getattr(question_decision, "followup_spec", None) or {} if question_decision else {}
 
     stage = fsm_state.get("stage", "project_deep_dive")
-    style_rule = _style_block(interview_style, target_role)
+    skill_phase = (
+        stage == "skills_assessment"
+        or str(target_topic).lower().startswith("skill:")
+        or bool(getattr(question_decision, "skill_kind", None))
+    )
+    style_rule = _style_block(interview_style, target_role, skill_phase=skill_phase)
     bank_q = (selected_question or {}).get("question") if selected_question else (spoken_seed or seed_q)
 
     if q_mode == "RETRIEVE":
@@ -77,14 +95,36 @@ def build_interviewer_prompt(
         )
         temperature = 0.35
     elif q_mode == "TEMPLATE":
-        mode_instruction = (
-            "MODE: TEMPLATE — PHRASE THE PROVIDED QUESTION\n"
-            f"Speak this question naturally. Do not change what it asks:\n"
-            f"ASK: {spoken_seed or seed_q}\n"
-            f"{style_rule}\n"
-            "One question. 12-40 spoken words."
-        )
-        temperature = 0.3
+        if skill_phase:
+            mode_instruction = (
+                "MODE: TEMPLATE — SPEAK THE PLANNED SKILL QUESTION\n"
+                f"You are live with {c_name}. Projects are finished. This turn is {target_topic} only.\n"
+                f"PLANNED ASK (keep this meaning): {seed_q or spoken_seed}\n"
+                f"FALLBACK IF YOU DRIFT: {spoken_seed or seed_q}\n"
+                "Do this:\n"
+                "1. You may say a short bridge like 'Let's switch to OOPs' or 'Next, DSA' (max 8 words).\n"
+                "2. Then ask the planned skill question. Same concept: polymorphism stays polymorphism, "
+                "hash maps stay hash maps.\n"
+                "3. Do NOT mention any project name. Do NOT reuse tools from their last project answer.\n"
+                "4. Do not add a second question.\n"
+                f"{style_rule}\n"
+                f"One question. 12-40 spoken words. Stay on {target_topic}."
+            )
+        else:
+            mode_instruction = (
+                "MODE: TEMPLATE — REPHRASE THE PLANNED ASK, DO NOT REPLACE IT\n"
+                f"You are live with {c_name}. Policy already chose the technical ask. You only make it sound spoken.\n"
+                f"PLANNED ASK (keep this meaning): {seed_q or spoken_seed}\n"
+                f"FALLBACK IF YOU DRIFT: {spoken_seed or seed_q}\n"
+                "Do this:\n"
+                "1. React in 3-8 words to something concrete they just said.\n"
+                "2. Ask the planned question in natural interviewer English — not a quiz card, not a definition dump.\n"
+                "3. Keep the same technical target (same concept, same difficulty). You may tighten wording.\n"
+                "4. Do not switch topic, skill, or project. Do not add a second question.\n"
+                f"{style_rule}\n"
+                f"Stay on {target_topic} at difficulty {target_diff}/3. One question. 12-40 spoken words."
+            )
+        temperature = 0.35
     else:
         anchor = spec.get("anchor_term") or primary_project
         must_probe = spec.get("must_probe") or "a concrete implementation detail"
@@ -97,47 +137,65 @@ def build_interviewer_prompt(
         last_excerpt = spec.get("previous_answer_excerpt") or ""
         thread_line = (
             f"This is question {spec.get('ladder_step') or 1} in the same thread. "
-            f"You already probed '{prev_probe}' on '{prev_anchor}'. Do not ask that again — go one level deeper.\n"
+            f"You already asked about '{prev_probe}' on '{prev_anchor}'. "
+            "Ask a DIFFERENT basic technical question — do not go deeper.\n"
             if prev_probe
-            else "This is the opening question in this thread. Set up the topic, then ask one technical question.\n"
+            else "This is the opening question in this thread. Set up the topic, then ask one basic technical question.\n"
         )
         mode_instruction = (
             "MODE: GENERATE — YOU WRITE THE NEXT INTERVIEW QUESTION\n"
             "Python chose the topic and probe. You write the actual spoken question from their last answer.\n"
             "Do NOT read a question bank. Do NOT ask a generic 'walk me through your project'.\n"
+            "Stay at BASIC technical terms. Do not go one level deeper.\n"
+            "Ask what a tool is, how they used it, or why they picked it — in simple language.\n"
+            "Do NOT ask about bottlenecks, drift, rollback, failure-first, or production metrics.\n"
             f"{stay_on}{thread_line}"
             "Acknowledge one concrete thing they just said (3-8 words), then ask ONE new technical question.\n"
-            "The question must be about implementation, a trade-off, a failure, or a metric they would have seen.\n"
             f"Name this term from their last answer: {anchor}\n"
-            f"Probe this one thing: {must_probe} ({spec.get('probe_type') or 'implementation'})\n"
+            f"Probe this one thing: {must_probe} ({spec.get('probe_type') or 'what_used'})\n"
             f"Terms they actually said: {mentioned}\n"
             f"Their last answer: {(candidate_answer or '')[:700]}\n"
             f"Previous answer excerpt: {last_excerpt or 'none'}\n"
             f"Fallback only if you cannot stay grounded: {fallback}\n"
             f"{style_rule}\n"
-            f"One question. 12-40 words. End with ?. Difficulty {target_diff}/3 on {target_topic}."
+            f"One question. 12-40 words. End with ?. Keep difficulty at BASIC (1/3) on {target_topic}."
         )
         temperature = 0.4
 
-    sys_prompt = f"""You are a skilled human interviewer for {target_role}, speaking out loud with {c_name}.
+    voice = (
+        "- One short bridge, then the planned skill question. No lecture.\n"
+        "- Do not name a project or reuse a library from the last project answer unless it is this skill.\n"
+        "- Sound curious, not robotic. Keep the planned OOP/DSA/skill concept.\n"
+        "- Use their name at most once, and only if it is natural."
+        if skill_phase
+        else
+        "- One short reaction to what they just said, then one question. No lecture.\n"
+        "- Use a noun they actually used (a library, metric, class, or project). Avoid \"that\", \"your approach\", \"tell me more\".\n"
+        "- Sound curious, not robotic. Do not read the planned ask word-for-word if you can say the same thing more naturally.\n"
+        "- Use their name at most once, and only if it is natural.\n"
+        "- This is one thread. The next question should feel like it follows their last sentence."
+    )
 
-You are NOT a chatbot. You are NOT reading a question bank. The backend chose the topic and probe. You write ONE natural next question from what they just said.
+    sys_prompt = f"""You are the interviewer in a live {target_role} voice interview with {c_name}.
+Speak the way a strong human interviewer speaks on a call: calm, specific, one beat ahead of the candidate.
+
+You do not run the interview. Python already chose the stage, topic, and planned ask.
+Your only job is to say the next question out loud so it sounds like a conversation, not a form.
 
 VOICE
-- Sound like a sharp interviewer, not a script reader.
-- Brief acknowledgment of what they just said, then one question.
-- Use their name at most once, and only if it sounds natural.
-- Prefer concrete nouns they used over vague words like "that" or "your approach".
-- Each question must follow from the previous one. This is one conversation, not a quiz list.
+{voice}
 
 HARD RULES
-1. Output ONLY the spoken sentence. No JSON, markdown, bullets, or labels.
-2. Ask exactly ONE question. End with a question mark.
-3. Never invent employers, projects, tools, or metrics that are not in the profile or their answer.
+1. Output ONLY the spoken line. No JSON, markdown, labels, or prefaces like "Question:".
+2. Ask exactly ONE question. End with ?.
+3. Never invent employers, projects, tools, or numbers that are not in the profile or their answer.
 4. Never repeat a question from PREVIOUSLY_ASKED_QUESTIONS.
 5. Stay inside {target_role}. Prefer overlapping skills: {primary_skills}.
-6. Maximum 40 spoken words.
-7. Yeah / yes / yep / sorry / well / okay are acknowledgements, not tools. If they said "yeah I used this", probe the current project or the last real term — never ask about Yeah, Weather, Sorry, or resume headings like Certifications.
+6. 12 to 40 spoken words.
+7. Yeah / yes / yep / sorry / well / okay are acknowledgements, not tools. Never treat them as technologies.
+8. In TEMPLATE mode, keep the planned technical ask. Rephrase it; do not replace it with a different concept.
+9. On project questions, stay at BASIC terms. Never ask about drift, bottlenecks, rollback, or production failure.
+10. On skill questions (OOPs, DSA, Python, …), never mention a project. Skills and projects are separate.
 
 STAGE: {stage}
 POLICY: {decision_directive}

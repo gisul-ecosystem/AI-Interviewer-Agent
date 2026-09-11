@@ -232,7 +232,11 @@ def _pick_device(requested: str) -> tuple[str, str]:
 
 
 def uses_whisper_api() -> bool:
-    return settings.speech.stt_provider.lower() in ("whisper_api", "groq", "api")
+    """Nemotron is not a provider. Anything except local Whisper uses the Groq API."""
+    provider = settings.speech.stt_provider.lower()
+    if provider in ("whisper", "local", "faster_whisper", "faster-whisper"):
+        return False
+    return True
 
 
 def get_whisper_engine() -> Transcriber:

@@ -1,7 +1,7 @@
 """
 Protect resume proper nouns in STT transcripts.
 
-Nemotron often turns MoleCheck into "model" and MobileNetV2 into "movile".
+Whisper sometimes turns MoleCheck into "model" and MobileNetV2 into "movile".
 Word-level fuzzy matching against short fragments ("Mole", "Net") makes that
 worse, so we correct against full CV terms and their spoken variants only.
 """

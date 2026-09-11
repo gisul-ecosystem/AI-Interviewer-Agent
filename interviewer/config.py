@@ -91,10 +91,9 @@ class LLMSettings:
 
 @dataclass(frozen=True)
 class SpeechSettings:
-    # whisper_api = Groq Whisper large-v3-turbo (API key). whisper = local faster-whisper.
-    # nemotron = remote FastConformer socket.
+    # whisper_api = Groq Whisper large-v3-turbo. whisper = local faster-whisper.
+    # Nemotron / FastConformer is not used and is ignored if set.
     stt_provider: str = field(default_factory=lambda: _env("STT_PROVIDER", "whisper_api"))
-    stt_ws_url: str = field(default_factory=lambda: _env("STT_WS_URL", "wss://stt.gisul.ai/ws/transcribe"))
     stt_model: str = field(default_factory=lambda: _env("STT_WHISPER_MODEL", "whisper-large-v3-turbo"))
     stt_device: str = field(default_factory=lambda: _env("STT_DEVICE", "auto"))
     stt_language: str = field(default_factory=lambda: _env("STT_LANGUAGE", "en"))

@@ -4,10 +4,11 @@ Grounded follow-up planner.
 Quality does not come from asking the LLM to "be a good interviewer".
 It comes from:
   1. Anchors from THIS resume + this utterance (Qwen maps "yeah I used this")
-  2. Staying on the SAME project and chaining the next probe
+  2. Staying on the SAME project and asking the next BASIC technical question
   3. Asking a question that names the project and that term
-  4. Rejecting generic LLM output and speaking the filled template instead
+  4. Rejecting generic or too-deep LLM output and speaking the filled template instead
 
+Project probes stay at student-level terms: what they used, how they used it, why they picked it.
 No global product list. A Rust/gRPC CV works the same as an AIML CV.
 """
 
@@ -23,8 +24,21 @@ STOPWORDS = {
     "about", "just", "like", "also", "very", "some", "when", "what", "which",
 }
 
-PROJECT_LADDER = ("implementation", "tradeoff", "metric")
+PROJECT_LADDER = ("what_used", "how_built", "why_simple")
+DEEP_PROJECT_LADDER = ("implementation", "tradeoff", "metric")
 FOCUS_TO_PROBE = {
+    "implementation": "what_used",
+    "what_used": "what_used",
+    "how_built": "how_built",
+    "why_simple": "why_simple",
+    "why": "why_simple",
+    "failure": "how_built",
+    "failure_mode": "how_built",
+    "metric": "how_built",
+    "tradeoff": "why_simple",
+    "missing_concept": "what_used",
+}
+DEEP_FOCUS_TO_PROBE = {
     "implementation": "implementation",
     "failure": "failure_mode",
     "failure_mode": "failure_mode",
@@ -34,24 +48,29 @@ FOCUS_TO_PROBE = {
 }
 
 PROBE_TEMPLATES = {
+    "what_used": (
+        "In simple terms, what is {anchor}, and what job did it do in your work?"
+    ),
+    "how_built": (
+        "How did you use {anchor} step by step — what went in, and what came out?"
+    ),
+    "why_simple": (
+        "Why did you pick {anchor} instead of another common option, in simple terms?"
+    ),
     "missing_concept": (
-        "How did {missing} actually show up in that design — "
-        "where did you put it, and what happened if it was wrong?"
+        "In simple terms, how did {missing} show up in that work, and what did you do with it?"
     ),
     "failure_mode": (
-        "When that path misbehaved — timeout, bad input, or drift — what broke first, "
-        "and how did you detect it?"
+        "When something went wrong with that part, what happened, and how did you notice it?"
     ),
     "tradeoff": (
-        "Why {anchor} instead of the obvious alternative, and where did it bottleneck?"
+        "Why {anchor} instead of a more common option, in simple terms?"
     ),
     "metric": (
-        "How did you measure whether {anchor} was working — accuracy, latency, error rate — "
-        "and what would have made you roll it back?"
+        "How did you check that {anchor} was working — what number or result did you look at?"
     ),
     "implementation": (
-        "Walk me through the pipeline you personally built inside {anchor}: "
-        "which component did you own, and how did data move to the next step?"
+        "Walk me through how you used {anchor}: which part did you write, and how did data move?"
     ),
 }
 
@@ -78,47 +97,59 @@ CONNECTED_BEHAVIORAL_TEMPLATES = {
 }
 
 CONNECTED_PROJECT_TEMPLATES = {
+    "what_used": (
+        "On {project} you mentioned {anchor}. In simple terms, what is {anchor}, "
+        "and what job did it do in this project?"
+    ),
+    "how_built": (
+        "On {project}, how did you use {anchor} — what went in, what came out, "
+        "and which part did you write yourself?"
+    ),
+    "why_simple": (
+        "On {project}, why did you pick {anchor} instead of another common option, in simple terms?"
+    ),
     "implementation": (
-        "On {project} you used {anchor}. Walk me through how you wired it in — "
-        "what inputs it took, what it output, and which piece you personally owned?"
+        "On {project} you used {anchor}. In simple terms, what did {anchor} do, "
+        "and which part did you write?"
     ),
     "failure_mode": (
-        "Staying on {project}: when {anchor} hit an unexpected failure or edge case — "
-        "what broke first, and how did you detect and handle it?"
+        "On {project}, when {anchor} did not work as expected, what happened and how did you notice?"
     ),
     "metric": (
-        "Still on {project} — which metric told you {anchor} was working, "
-        "and what benchmark or validation threshold did you aim for?"
+        "On {project}, how did you check that {anchor} was working — what result did you look at?"
     ),
     "missing_concept": (
-        "On {project} you mentioned {anchor}. Where did {missing} actually sit in that pipeline, "
-        "and what happened if it was wrong?"
+        "On {project} you mentioned {anchor}. In simple terms, how did {missing} show up there?"
     ),
     "tradeoff": (
-        "On {project}, why {anchor} instead of alternative approaches — "
-        "what trade-offs did you evaluate, and where did it bottleneck?"
+        "On {project}, why {anchor} instead of another common option, in simple terms?"
     ),
 }
 
 SAME_ANCHOR_PROJECT_TEMPLATES = {
+    "what_used": (
+        "On {project}, which main library, model, or tool did you use, and what did it actually do?"
+    ),
+    "how_built": (
+        "On {project}, walk me through the basic steps you built — data in, the code or model, and the result out."
+    ),
+    "why_simple": (
+        "On {project}, why that library or model, in simple terms a classmate would understand?"
+    ),
     "implementation": (
-        "On {project}, walk me through the core pipeline or architecture you personally built — "
-        "which component did you own, and how did data flow through to the end result?"
+        "On {project}, which main tool or model did you use, and what job did it do?"
     ),
     "failure_mode": (
-        "On {project}, when an unexpected error or edge case occurred — "
-        "what broke first, and how did you catch and handle it safely?"
+        "On {project}, when something did not work, what happened and how did you notice?"
     ),
     "metric": (
-        "On {project}, which validation metric or benchmark did you track — "
-        "and what target told you it was ready for use?"
+        "On {project}, how did you check it was working — what result or number did you look at?"
     ),
     "missing_concept": (
-        "On {project}, how did {missing} actually show up in that design, "
-        "and what happened if it was wrong?"
+        "On {project}, in simple terms, how did {missing} show up in what you built?"
     ),
     "tradeoff": (
-        "On {project}, why that architecture over the obvious alternative, and where did it bottleneck?"
+        "On {project}, why that tool or model instead of a more common option?"
     ),
 }
 
@@ -184,17 +215,36 @@ def is_valid_anchor(term: str, allowed: Optional[set[str]] = None) -> bool:
     return bool(t.isupper() and t.isalpha() and 2 <= len(t) <= 8)
 
 
-def _next_probe(asked: List[str], focus: str, missing: List[str], depth: str) -> str:
+DEEP_PROJECT_ASK = re.compile(
+    r"\b("
+    r"bottleneck|drift(?:ed|ing)?|roll\s*back|production|latency|"
+    r"broke first|failed first|edge case|system design|distributed|"
+    r"throughput|observability|quantization|sla\b"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _next_probe(
+    asked: List[str],
+    focus: str,
+    missing: List[str],
+    depth: str,
+    *,
+    basic: bool = True,
+) -> str:
     used = {str(p) for p in asked if p}
-    requested = FOCUS_TO_PROBE.get(focus or "", "")
+    mapping = FOCUS_TO_PROBE if basic else DEEP_FOCUS_TO_PROBE
+    ladder = PROJECT_LADDER if basic else DEEP_PROJECT_LADDER
+    requested = mapping.get(focus or "", "")
     if requested and requested not in used:
         return requested
-    if missing and depth != "high" and "missing_concept" not in used:
+    if not basic and missing and depth != "high" and "missing_concept" not in used:
         return "missing_concept"
-    for step in PROJECT_LADDER:
+    for step in ladder:
         if step not in used:
             return step
-    return requested or "metric"
+    return requested or ("how_built" if basic else "metric")
 
 
 _ANSWER_TERM_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9+#./-]{2,}\b")
@@ -331,8 +381,8 @@ def plan_followup(
     """
     Decide the single probe for this turn.
 
-    Project follow-ups stay on the same resume project and climb
-    implementation → failure → metric, using the last answer as the anchor.
+    Project follow-ups stay on the same resume project and ask the next
+    basic technical question: what they used → how they used it → why they picked it.
     """
     eval_res = eval_res or {}
     missing = [str(m) for m in (eval_res.get("missing_concepts") or []) if m]
@@ -356,8 +406,11 @@ def plan_followup(
     else:
         anchor = _pick_anchor(mentioned, project, last_anchor, topic_name, answer=candidate_answer)
 
+    basic_project = interview_style != "behavioral"
     if project and project.lower() not in GENERIC_PROJECTS:
-        probe_type = _next_probe(asked, focus, missing, depth)
+        probe_type = _next_probe(asked, focus, missing, depth, basic=basic_project)
+    elif basic_project:
+        probe_type = _next_probe(asked, focus, missing, depth, basic=True)
     elif missing and depth != "high":
         probe_type = "missing_concept"
     elif focus == "tradeoff" or (mentioned and depth == "high"):
@@ -370,11 +423,14 @@ def plan_followup(
         probe_type = "implementation"
 
     must_probe = {
+        "what_used": "what that tool is and what it did",
+        "how_built": "how they used it, step by step",
+        "why_simple": "why they picked it, in simple terms",
         "missing_concept": missing[0] if missing else "a missing concept",
-        "failure_mode": "failure handling",
-        "tradeoff": "trade-off",
-        "metric": "validation metric",
-        "implementation": "implementation detail",
+        "failure_mode": "what went wrong and how they noticed",
+        "tradeoff": "why they picked that option",
+        "metric": "how they checked it was working",
+        "implementation": "what they built and which part they wrote",
     }.get(probe_type, probe_type.replace("_", " "))
 
     if project and project.lower() not in GENERIC_PROJECTS:
@@ -464,6 +520,9 @@ def is_quality_followup(text: str, spec: Optional[Dict[str, Any]] = None) -> boo
     if "?" not in clean:
         return False
     spec = spec or {}
+    if spec.get("interview_style") != "behavioral" and spec.get("project_name"):
+        if DEEP_PROJECT_ASK.search(clean):
+            return False
     project = str(spec.get("project_name") or (spec.get("project_thread") or {}).get("project") or "").strip()
     anchor = str(spec.get("anchor_term") or "").strip()
     mentioned = [str(t) for t in (spec.get("mentioned_terms") or []) if t]
@@ -492,7 +551,21 @@ def _content_tokens(text: str) -> list[str]:
     ]
 
 
-def is_quality_phrasing(llm_text: str, seed: str) -> bool:
+SKILL_PROJECT_LEAK = re.compile(
+    r"\b("
+    r"your project|this project|that project|in one of your projects|"
+    r"on your resume|walk me through"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def is_quality_phrasing(
+    llm_text: str,
+    seed: str,
+    *,
+    block_projects: Optional[List[str]] = None,
+) -> bool:
     """RETRIEVE/TEMPLATE: keep Qwen only if it still asks the same thing."""
     clean = " ".join((llm_text or "").split()).strip()
     words = clean.split()
@@ -502,6 +575,12 @@ def is_quality_phrasing(llm_text: str, seed: str) -> bool:
         return False
     if GENERIC_FOLLOWUP.search(clean):
         return False
+    if block_projects:
+        if SKILL_PROJECT_LEAK.search(clean):
+            return False
+        for project in block_projects:
+            if project and mentions_project(clean, project):
+                return False
     seed_tokens = _content_tokens(seed)[:10]
     if not seed_tokens:
         return True
@@ -530,7 +609,12 @@ def finalize_spoken_question(llm_text: str, question_decision: Any, fallback: st
         if not spec.get("spoken_fallback"):
             spec = {**spec, "spoken_fallback": spoken}
         return finalize_followup(llm_text, spec) or spoken
-    seed = spoken or getattr(question_decision, "seed_question", None) or ""
-    if is_quality_phrasing(llm_text, seed):
+    seed = getattr(question_decision, "seed_question", None) or spoken
+    topic = f"{getattr(question_decision, 'target_topic', '')} {getattr(question_decision, 'seed_topic', '')}".lower()
+    is_skill = bool(getattr(question_decision, "skill_kind", None)) or "skill:" in topic
+    block_projects = list(getattr(question_decision, "block_projects", None) or [])
+    if is_skill and SKILL_PROJECT_LEAK.search(str(llm_text) or ""):
+        return spoken
+    if is_quality_phrasing(llm_text, seed, block_projects=block_projects or None):
         return str(llm_text).strip()
     return spoken

@@ -84,8 +84,8 @@ def test_grounded_followup_quality():
     assert finalize_followup(generic, spec) == spec["spoken_fallback"]
 
     good = (
-        f"On Autonomous Drone Navigation you used {spec['anchor_term']} at 50Hz — "
-        f"when GPS dropped, what failed first in fusion?"
+        f"On Autonomous Drone Navigation you used {spec['anchor_term']} — "
+        f"in simple terms, what does it do, and which part did you write?"
     )
     assert is_quality_followup(good, spec) is True
     assert finalize_followup(good, spec) == good
@@ -302,7 +302,7 @@ def test_project_thread_climbs_one_ladder():
             eval_res={"depth": "med", "missing_concepts": [], "score": 0.65},
             candidate_dict=cv,
             topic="Project: MoleCheck",
-            focus=("implementation", "tradeoff", "metric")[turn],
+            focus=("what_used", "how_built", "why_simple")[turn],
             project_thread=thread,
             project_name="MoleCheck",
         )
@@ -311,7 +311,10 @@ def test_project_thread_climbs_one_ladder():
         thread = spec["project_thread"]
 
     assert len(set(probes)) == 3, probes
+    assert probes == ["what_used", "how_built", "why_simple"], probes
     assert all("MoleCheck" in text for text in spoken)
+    deep = ("bottleneck", "drift", "roll back", "rollback", "broke first")
+    assert not any(word in text.lower() for text in spoken for word in deep), spoken
 
     last = plan_followup(
         answers[-1],
@@ -345,6 +348,8 @@ def test_project_thread_climbs_one_ladder():
     sys_msg = prompt["messages"][0]["content"]
     assert "WRITE THE NEXT INTERVIEW QUESTION" in sys_msg
     assert "last answer" in sys_msg.lower()
+    assert "basic" in sys_msg.lower()
+    assert "do not go deeper" in sys_msg.lower() or "do not go one level deeper" in sys_msg.lower()
     print("[SUCCESS] Project follow-ups climb one ladder and reference the last turn.")
 
 
@@ -362,7 +367,31 @@ def test_followup_uses_spoken_technical_terms():
     blob = " ".join([spec["anchor_term"], *(spec["mentioned_terms"] or []), spec["spoken_fallback"]]).lower()
     assert "keras" in blob or "mobilenet" in blob or "augmentation" in blob, spec
     assert "molecheck" in spec["spoken_fallback"].lower()
+    assert spec["probe_type"] == "what_used"
+    assert "simple" in spec["spoken_fallback"].lower() or "what is" in spec["spoken_fallback"].lower()
+    from backend.followup_engine import finalize_followup
+    deep = "On MoleCheck you used Keras — when the classifier drifted, what broke first and what would make you roll it back?"
+    assert finalize_followup(deep, spec) == spec["spoken_fallback"]
     print("[SUCCESS] Follow-ups latch onto spoken technical terms.")
+
+
+def test_parse_qwen_skill_questions_from_upload():
+    from backend.interview_plan import parse_generated_skill_questions
+
+    raw = """```json
+    {"slots":[
+      {"skill":"Python","questions":[
+        "What is the GIL and when do you use multiprocessing instead of threads?",
+        "How do generators keep a large Pandas pipeline from loading everything into RAM?",
+        "How would you isolate a silent NaN in a NumPy transform before it hits training?"
+      ]}
+    ]}
+    ```"""
+    parsed = parse_generated_skill_questions(raw, ["Python", "TensorFlow"], 3)
+    assert len(parsed["Python"]) == 3
+    assert "TensorFlow" not in parsed
+    assert parsed["Python"][0].endswith("?")
+    print("[SUCCESS] Upload-time Qwen skill JSON parses.")
 
 
 def test_plan_locks_skill_bases_and_three_questions():
@@ -424,6 +453,9 @@ def test_plan_locks_skill_bases_and_three_questions():
     )
     assert first.mode == "TEMPLATE"
     assert first.wants_qwen_phrasing("TECHNICAL_ANSWER") is False
+    spoken = (first.spoken_question or "").lower()
+    assert "molecheck" not in spoken
+    assert any(token in spoken for token in ("class", "inherit", "polymorph", "encapsul", "object", "liskov", "composition"))
     follow = question_engine.decide(
         candidate_answer="I used inheritance so the trainer and the serving adapter shared one interface.",
         intent="TECHNICAL_ANSWER",
@@ -436,7 +468,75 @@ def test_plan_locks_skill_bases_and_three_questions():
     assert follow.wants_qwen_phrasing("TECHNICAL_ANSWER") is False
     assert follow.spoken_question
     assert first.spoken_question != follow.spoken_question
+    assert "molecheck" not in (follow.spoken_question or "").lower()
+    from backend.prompt_builder import build_interviewer_prompt
+    prompt = build_interviewer_prompt(
+        fsm_state=state,
+        candidate_dict=candidate,
+        candidate_answer="I used Random Forest on MoleCheck.",
+        question_decision=follow,
+    )
+    sys_msg = prompt["messages"][0]["content"]
+    assert "PLANNED ASK" in sys_msg
+    assert "never mention a project" in sys_msg.lower() or "do not mention" in sys_msg.lower()
     print("[SUCCESS] OOPs/DSA and skill follow-ups are locked at upload.")
+
+
+def test_dsa_question_is_not_a_project_followup():
+    from backend.followup_engine import finalize_spoken_question
+    from backend.question_engine import QuestionDecision, question_engine
+    from backend.session_manager import create_session
+
+    session = create_session({
+        "name": "Aditya",
+        "skills": ["TensorFlow", "Python"],
+        "projects": ["MoleCheck", "Mental Health Predictor"],
+        "raw_text": "SKILLS Python, TensorFlow\nPROJECTS MoleCheck, Mental Health Predictor",
+        "role": "AI / ML Engineer",
+    })
+    candidate = session["candidate"]
+    names = [str(s.get("skill") or "") for s in (session["interview_plan"] or {}).get("skill_slots") or []]
+    dsa_idx = next(
+        i for i, name in enumerate(names)
+        if "data structure" in name.lower() or name.lower() == "dsa"
+    )
+    dsa = question_engine.decide(
+        candidate_answer="On MoleCheck we used MobileNetV2 and a correlation matrix.",
+        intent="TECHNICAL_ANSWER",
+        fsm_state={
+            "stage": "skills_assessment",
+            "difficulty_level": 2,
+            "current_skill_index": dsa_idx,
+            "skill_question_count": 0,
+            "questions_already_asked": [],
+            "action": "CONTINUE",
+        },
+        eval_res={"depth": "med", "score": 0.6, "is_skip": False},
+        candidate_dict=candidate,
+        interview_plan=session["interview_plan"],
+    )
+    spoken = (dsa.spoken_question or "").lower()
+    assert dsa.skill_kind == "foundation"
+    assert dsa.wants_qwen_phrasing("TECHNICAL_ANSWER") is False
+    assert "molecheck" not in spoken
+    assert "mental health" not in spoken
+    assert any(token in spoken for token in ("hash", "cache", "linked", "stack", "queue", "array", "complex", "pointer", "tree", "sort", "search", "list"))
+    leaked = QuestionDecision(
+        mode="TEMPLATE",
+        seed_question=dsa.seed_question,
+        seed_topic=dsa.seed_topic,
+        similarity_score=1.0,
+        target_topic=dsa.target_topic,
+        target_difficulty=1,
+        directive=dsa.directive,
+        probes=[],
+        spoken_question=dsa.spoken_question,
+        skill_kind="foundation",
+        block_projects=["MoleCheck", "Mental Health Predictor"],
+    )
+    hijack = "On MoleCheck you used MobileNetV2 — how would you store that in a stack or queue?"
+    assert finalize_spoken_question(hijack, leaked) == dsa.spoken_question
+    print("[SUCCESS] DSA questions stay DSA, not project follow-ups.")
 
 
 if __name__ == "__main__":
@@ -447,4 +547,6 @@ if __name__ == "__main__":
     test_qwen_phrasing_keeps_policy()
     test_project_thread_climbs_one_ladder()
     test_followup_uses_spoken_technical_terms()
+    test_parse_qwen_skill_questions_from_upload()
     test_plan_locks_skill_bases_and_three_questions()
+    test_dsa_question_is_not_a_project_followup()

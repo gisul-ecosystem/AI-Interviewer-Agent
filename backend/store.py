@@ -19,6 +19,7 @@ import logging
 import os
 import sqlite3
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -35,7 +36,9 @@ CREATE TABLE IF NOT EXISTS interviews (
     track                 TEXT,
     stage                 TEXT,
     created_at            REAL,
+    started_at            REAL,
     ended_at              REAL,
+    duration_seconds      INTEGER,
     updated_at            REAL,
     candidate_json        TEXT,
     job_requirements_json TEXT,
@@ -75,9 +78,53 @@ CREATE INDEX IF NOT EXISTS idx_interviews_ended   ON interviews(ended_at);
 CREATE INDEX IF NOT EXISTS idx_reports_rec        ON reports(recommendation);
 """
 
-
 def _dumps(value: Any) -> str:
     return json.dumps(value, default=str, ensure_ascii=False)
+
+
+def iso_ts(value: Any) -> Optional[str]:
+    """Unix seconds (or ms) → UTC ISO-8601. None if missing."""
+    if value is None or value == "":
+        return None
+    try:
+        ts = float(value)
+    except (TypeError, ValueError):
+        return None
+    if ts <= 0:
+        return None
+    if ts > 1e12:
+        ts /= 1000.0
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def duration_between(started_at: Any, ended_at: Any) -> Optional[int]:
+    if started_at is None or ended_at is None:
+        return None
+    try:
+        seconds = int(float(ended_at) - float(started_at))
+    except (TypeError, ValueError):
+        return None
+    return max(0, seconds)
+
+
+def interview_timing(started_at: Any, ended_at: Any, duration_seconds: Any = None) -> Dict[str, Any]:
+    started = float(started_at) if started_at not in (None, "") else None
+    ended = float(ended_at) if ended_at not in (None, "") else None
+    duration = duration_seconds
+    if duration is None:
+        duration = duration_between(started, ended)
+    elif duration is not None:
+        try:
+            duration = max(0, int(duration))
+        except (TypeError, ValueError):
+            duration = duration_between(started, ended)
+    return {
+        "started_at": started,
+        "ended_at": ended,
+        "duration_seconds": duration,
+        "started_at_iso": iso_ts(started),
+        "ended_at_iso": iso_ts(ended),
+    }
 
 
 def _loads(raw: Optional[str], fallback: Any) -> Any:
@@ -103,6 +150,7 @@ class InterviewStore:
         try:
             with self._connect() as conn:
                 conn.executescript(SCHEMA)
+                self._migrate(conn)
             self._available = True
             logger.info(f"[InterviewStore] Ready at {self.db_path}")
         except Exception as exc:
@@ -121,6 +169,52 @@ class InterviewStore:
         conn.execute("PRAGMA synchronous=NORMAL")
         return conn
 
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        """Add start/end timing columns to DBs created before those fields existed."""
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(interviews)")}
+        if "started_at" not in cols:
+            conn.execute("ALTER TABLE interviews ADD COLUMN started_at REAL")
+        if "duration_seconds" not in cols:
+            conn.execute("ALTER TABLE interviews ADD COLUMN duration_seconds INTEGER")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_interviews_started ON interviews(started_at)"
+        )
+        conn.execute(
+            """
+            UPDATE interviews
+            SET started_at = COALESCE(started_at, created_at)
+            WHERE started_at IS NULL
+            """
+        )
+        conn.execute(
+            """
+            UPDATE interviews
+            SET ended_at = (
+                SELECT MAX(t.asked_at) FROM turns t WHERE t.session_id = interviews.session_id
+            )
+            WHERE ended_at IS NULL
+              AND (
+                    stage = 'completed'
+                    OR EXISTS (SELECT 1 FROM reports r WHERE r.session_id = interviews.session_id)
+                  )
+              AND EXISTS (
+                    SELECT 1 FROM turns t
+                    WHERE t.session_id = interviews.session_id AND t.asked_at IS NOT NULL
+                  )
+            """
+        )
+        conn.execute(
+            """
+            UPDATE interviews
+            SET duration_seconds = CAST(
+                ended_at - COALESCE(started_at, created_at) AS INTEGER
+            )
+            WHERE ended_at IS NOT NULL
+              AND duration_seconds IS NULL
+              AND COALESCE(started_at, created_at) IS NOT NULL
+            """
+        )
+
     # ─── Writes ───────────────────────────────────────────────────────────────
 
     def save_interview(self, session: Dict[str, Any]) -> bool:
@@ -134,6 +228,11 @@ class InterviewStore:
         candidate = session.get("candidate") or {}
         state = session.get("interview_state") or {}
         history = session.get("history") or []
+        started_at = session.get("started_at") or session.get("created_at")
+        ended_at = session.get("ended_at")
+        duration_seconds = session.get("duration_seconds")
+        if duration_seconds is None:
+            duration_seconds = duration_between(started_at, ended_at)
 
         try:
             with self._connect() as conn:
@@ -141,15 +240,25 @@ class InterviewStore:
                     """
                     INSERT INTO interviews (
                         session_id, candidate_name, target_role, track, stage,
-                        created_at, ended_at, updated_at,
+                        created_at, started_at, ended_at, duration_seconds, updated_at,
                         candidate_json, job_requirements_json, interview_state_json, resume_text
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(session_id) DO UPDATE SET
                         candidate_name        = excluded.candidate_name,
                         target_role           = excluded.target_role,
                         track                 = excluded.track,
                         stage                 = excluded.stage,
+                        started_at            = COALESCE(interviews.started_at, excluded.started_at),
                         ended_at              = COALESCE(excluded.ended_at, interviews.ended_at),
+                        duration_seconds      = CASE
+                            WHEN COALESCE(excluded.ended_at, interviews.ended_at) IS NOT NULL
+                            THEN MAX(0, CAST(
+                                COALESCE(excluded.ended_at, interviews.ended_at)
+                                - COALESCE(interviews.started_at, excluded.started_at, excluded.created_at)
+                                AS INTEGER
+                            ))
+                            ELSE interviews.duration_seconds
+                        END,
                         updated_at            = excluded.updated_at,
                         candidate_json        = excluded.candidate_json,
                         job_requirements_json = excluded.job_requirements_json,
@@ -162,8 +271,10 @@ class InterviewStore:
                         candidate.get("target_role"),
                         candidate.get("target_track") or candidate.get("bank_track"),
                         state.get("stage"),
-                        session.get("created_at"),
-                        session.get("ended_at"),
+                        session.get("created_at") or started_at,
+                        started_at,
+                        ended_at,
+                        duration_seconds,
                         time.time(),
                         _dumps(candidate),
                         _dumps(session.get("job_requirements") or {}),
@@ -265,10 +376,15 @@ class InterviewStore:
                     "SELECT * FROM turns WHERE session_id = ? ORDER BY turn_index", (session_id,)
                 ).fetchall()
 
+            timing = interview_timing(
+                row["started_at"] if "started_at" in row.keys() else row["created_at"],
+                row["ended_at"],
+                row["duration_seconds"] if "duration_seconds" in row.keys() else None,
+            )
             return {
                 "session_id": row["session_id"],
                 "created_at": row["created_at"],
-                "ended_at": row["ended_at"],
+                **timing,
                 "candidate": _loads(row["candidate_json"], {}),
                 "job_requirements": _loads(row["job_requirements_json"], {}),
                 "interview_state": _loads(row["interview_state_json"], {}),
@@ -319,7 +435,7 @@ class InterviewStore:
             return []
         sql = """
             SELECT i.session_id, i.candidate_name, i.target_role, i.stage,
-                   i.created_at, i.ended_at,
+                   i.created_at, i.started_at, i.ended_at, i.duration_seconds,
                    r.overall_score, r.recommendation, r.graded_by,
                    (SELECT COUNT(*) FROM turns t WHERE t.session_id = i.session_id) AS turn_count
             FROM interviews i
@@ -334,12 +450,21 @@ class InterviewStore:
             params.append(recommendation)
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY COALESCE(i.ended_at, i.created_at) DESC LIMIT ?"
+        sql += " ORDER BY COALESCE(i.ended_at, i.started_at, i.created_at) DESC LIMIT ?"
         params.append(int(limit))
 
         try:
             with self._connect() as conn:
-                return [dict(r) for r in conn.execute(sql, params).fetchall()]
+                rows = []
+                for raw in conn.execute(sql, params).fetchall():
+                    row = dict(raw)
+                    row.update(interview_timing(
+                        row.get("started_at") or row.get("created_at"),
+                        row.get("ended_at"),
+                        row.get("duration_seconds"),
+                    ))
+                    rows.append(row)
+                return rows
         except Exception as exc:
             logger.error(f"[InterviewStore] list_interviews failed: {exc}")
             return []

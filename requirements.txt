@@ -2,7 +2,6 @@
 fastapi>=0.115,<1
 uvicorn[standard]>=0.30,<1
 python-multipart>=0.0.9,<1
-websockets>=12,<18
 pypdf>=4,<7
 
 # Pooled async HTTP for the LLM / TTS adapters. Connection reuse is a

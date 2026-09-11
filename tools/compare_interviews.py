@@ -154,7 +154,10 @@ async def run_one(persona: Dict[str, Any]) -> Dict[str, Any]:
         })
 
     live = app.load_live_session(session_id)
+    if not live.get("started_at"):
+        live["started_at"] = live.get("created_at") or time.time()
     live["ended_at"] = time.time()
+    live["duration_seconds"] = max(0, int(live["ended_at"] - live["started_at"]))
     live["interview_state"]["stage"] = "completed"
     persisted = interview_store.save_interview(live)
 

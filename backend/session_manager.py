@@ -73,10 +73,14 @@ def create_session(cv_features: Dict[str, Any] = None, role_override: str = None
 
     est_total_questions = interview_plan.get("total_questions") or 8
 
+    now = time.time()
     session = {
         "session_id": sid,
-        "created_at": time.time(),
-        "last_turn_time": time.time(),
+        "created_at": now,
+        "started_at": now,
+        "ended_at": None,
+        "duration_seconds": None,
+        "last_turn_time": now,
         "candidate": {
             "name": c_name,
             "skills": c_skills,

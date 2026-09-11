@@ -6,7 +6,7 @@
  * 2. Continuous phase-preserved resampler converts native SR → 16000 Hz PCM16 LE seamlessly
  *    without boundary clicks, clicks, pops, or 11Hz amplitude modulation glitches.
  * 3. Sends complete 160ms chunks (2560 samples = 5120 bytes) to FastAPI WebSocket relay.
- * 4. Displays real-time Nemotron FastConformer STT transcript without repeated words.
+ * 4. Displays real-time Whisper STT captions.
  * 5. Integrates Qwen3-4B phrasing and Kokoro TTS (no Chrome voice).
  */
 
@@ -1959,6 +1959,35 @@ function closeHistoryDrawer() {
   if (backdrop) backdrop.hidden = true;
 }
 
+function formatUnixLocal(ts) {
+  const n = Number(ts);
+  if (!n) return '';
+  return new Date(n < 1e12 ? n * 1000 : n).toLocaleString();
+}
+
+function formatDurationClock(seconds) {
+  if (seconds == null || seconds === '') return '';
+  const total = Math.max(0, Math.floor(Number(seconds)));
+  if (Number.isNaN(total)) return '';
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours) return `${hours}h ${minutes}m`;
+  if (minutes) return secs ? `${minutes}m ${secs}s` : `${minutes}m`;
+  return `${secs}s`;
+}
+
+function formatInterviewTiming(row, detailed) {
+  const start = formatUnixLocal(row && (row.started_at || row.created_at));
+  const end = formatUnixLocal(row && row.ended_at);
+  const dur = formatDurationClock(row && row.duration_seconds);
+  const parts = [];
+  if (start) parts.push(detailed ? `Started ${start}` : start);
+  if (end) parts.push(detailed ? `Ended ${end}` : `ended ${end}`);
+  if (dur) parts.push(dur);
+  return parts.join(' · ') || 'Time not recorded';
+}
+
 async function loadPastInterviews() {
   const list = document.getElementById('historyInterviewList');
   const role = (document.getElementById('historyRoleFilter') || {}).value || '';
@@ -1979,13 +2008,11 @@ async function loadPastInterviews() {
       list.innerHTML = rows.map((row) => {
         const score = row.overall_score != null ? scoreToHundred(row.overall_score, 5) : '—';
         const recLabel = REC_LABELS[row.recommendation] || row.recommendation || 'ungraded';
-        const when = row.ended_at || row.created_at || '';
-        const ts = Number(when);
-        const date = ts ? new Date(ts < 1e12 ? ts * 1000 : ts).toLocaleString() : '';
+        const clock = formatInterviewTiming(row);
         return `<button type="button" class="history-row" data-session="${row.session_id}">
           <strong>${row.candidate_name || 'Candidate'}</strong>
           <div>${row.target_role || ''} · ${score}/100 · ${recLabel}</div>
-          <div>${date} · ${row.turn_count || 0} turns</div>
+          <div>${clock} · ${row.turn_count || 0} turns</div>
         </button>`;
       }).join('');
       list.querySelectorAll('.history-row').forEach((btn) => {
@@ -2017,6 +2044,7 @@ async function showPastInterview(sessionId) {
       </div>`).join('');
     if (detail) {
       detail.innerHTML = `${renderScorecardHtml(report.status === 'done' ? report : { status: 'running' }, report.status === 'running' ? 'Still grading…' : '')}
+        <p class="history-timing">${formatInterviewTiming(hist, true)}</p>
         <h3>Transcript</h3>${turns || '<p>No turns stored.</p>'}`;
     }
   } catch (err) {

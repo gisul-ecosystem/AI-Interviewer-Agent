@@ -11,7 +11,7 @@ import argparse
 import sqlite3
 from pathlib import Path
 
-from backend.store import DEFAULT_DB_PATH, interview_store
+from backend.store import DEFAULT_DB_PATH, interview_store, iso_ts
 
 
 def main() -> None:
@@ -35,18 +35,22 @@ def main() -> None:
     rows = conn.execute(
         """
         SELECT i.session_id, i.candidate_name, i.target_role, i.track, i.stage,
+               i.started_at, i.ended_at, i.duration_seconds,
                r.overall_score, r.recommendation, r.graded_by,
                (SELECT COUNT(*) FROM turns t WHERE t.session_id = i.session_id) AS n_turns
         FROM interviews i
         LEFT JOIN reports r ON r.session_id = i.session_id
-        ORDER BY COALESCE(i.ended_at, i.created_at) DESC
+        ORDER BY COALESCE(i.ended_at, i.started_at, i.created_at) DESC
         LIMIT 20
         """
     ).fetchall()
     if not rows:
         print("(empty)")
     for row in rows:
-        print(dict(row))
+        item = dict(row)
+        item["started_at_iso"] = iso_ts(item.get("started_at"))
+        item["ended_at_iso"] = iso_ts(item.get("ended_at"))
+        print(item)
 
     sid = args.session or (rows[0]["session_id"] if rows else None)
     if sid:

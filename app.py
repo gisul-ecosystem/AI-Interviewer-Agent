@@ -1,11 +1,10 @@
 """
-FastAPI Server for Live Real-Time Voice Interviewing with Robust Async WebSocket Relay.
+FastAPI Server for Live Real-Time Voice Interviewing.
 
 Features:
-    - Serves modern Live Interview Web Interface
-    - High-speed async streaming bridge to wss://stt.gisul.ai/ws/transcribe
-    - Zero timeout dropouts (handles continuous conversational speech)
-    - Integrates Qwen3-4B LLM Interview Brain via https://llm.gisul.ai
+    - Serves the live interview web interface
+    - Mic PCM → Groq Whisper (or local Whisper) captions
+    - Qwen3-4B phrasing and Kokoro TTS
 """
 
 import time
@@ -16,7 +15,6 @@ import os
 import asyncio
 import json
 import re
-import ssl
 import sys
 import urllib.request
 from contextlib import asynccontextmanager
@@ -25,7 +23,6 @@ from typing import Optional, Dict, Any, List
 
 import requests
 import uvicorn
-import websockets
 from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -41,7 +38,6 @@ try:
 except ImportError:
     HAS_PYPDF = False
 
-STT_WS_URL = "wss://stt.gisul.ai/ws/transcribe"
 LLM_COMPLETIONS_URL = "https://llm.gisul.ai/v1/chat/completions"
 LLM_MODEL = "qwen3:4b-instruct-2507-q4_K_M"
 LLM_CONCURRENCY = asyncio.Semaphore(12)
@@ -627,8 +623,8 @@ def _tick_session_clock(session: dict) -> None:
     state = session.setdefault("interview_state", {})
     remaining = int(state.get("time_remaining_seconds") or INTERVIEW_DURATION_SECONDS)
     state["time_remaining_seconds"] = max(0, remaining - elapsed)
-    created = session.get("created_at") or now
-    state["elapsed_seconds"] = max(0, int(now - created))
+    started = session.get("started_at") or session.get("created_at") or now
+    state["elapsed_seconds"] = max(0, int(now - started))
 
 
 async def _finish_interview(session: dict) -> dict:
@@ -644,8 +640,13 @@ async def _finish_interview(session: dict) -> dict:
     state = session.setdefault("interview_state", {})
     state["stage"] = "completed"
     state["action"] = "END_INTERVIEW"
+    if not session.get("started_at"):
+        session["started_at"] = session.get("created_at") or time.time()
     if not session.get("ended_at"):
         session["ended_at"] = time.time()
+    session["duration_seconds"] = max(
+        0, int(session["ended_at"] - session["started_at"])
+    )
     if session_id:
         session_store.save_session(session_id, session)
         persisted = await asyncio.to_thread(interview_store.save_interview, session)
@@ -962,10 +963,14 @@ def _make_session(features: dict, role_override: str | None = None, raw_resume_t
         planned_skills,
     )
 
+    now = time.time()
     return {
         "session_id": sid,
-        "created_at": time.time(),
-        "last_turn_time": time.time(),
+        "created_at": now,
+        "started_at": now,
+        "ended_at": None,
+        "duration_seconds": None,
+        "last_turn_time": now,
 
         "session_rag": session_rag,
         "phonetic_replacements": session_phonetics,
@@ -1057,6 +1062,8 @@ async def lifespan(_app: FastAPI):
     from interviewer.config import settings as _settings
     from interviewer.services.whisper_stt import uses_whisper_api, warmup_whisper
     provider = _settings.speech.stt_provider.lower()
+    if provider in ("nemotron", "fastconformer"):
+        print("[Startup] STT_PROVIDER=nemotron is disabled. Using Whisper instead.")
     if uses_whisper_api():
         if _settings.speech.stt_api_key:
             print("[Startup] Whisper large-v3-turbo via Groq API (STT_API_KEY / GROQ_API_KEY).")
@@ -1200,6 +1207,36 @@ async def api_correct_transcript(payload: dict):
     return {"raw": raw_text, "corrected": corrected, "rag_context": rag_context}
 
 
+def _plan_candidate_payload(features: dict, plan: dict, sift: dict | None = None, raw_text: str = "") -> dict:
+    sift = sift or {}
+    return {
+        "name": features.get("name") or "",
+        "role": sift.get("label") or features.get("role"),
+        "target_role": sift.get("label") or features.get("target_role") or features.get("role"),
+        "projects": plan.get("project_names") or features.get("projects") or [],
+        "resume_text": raw_text or features.get("raw_text") or "",
+    }
+
+
+async def _qwen_fill_skill_plan(plan: dict, features: dict, sift: dict | None = None, raw_text: str = "") -> dict:
+    """Generate skill questions at upload/preview so the live path only phrases them."""
+    from backend.interview_plan import generate_skill_questions_with_qwen
+    return await generate_skill_questions_with_qwen(
+        plan,
+        _plan_candidate_payload(features, plan, sift, raw_text),
+    )
+
+
+def _apply_plan_to_session(session: dict, plan: dict) -> None:
+    session["interview_plan"] = plan
+    candidate = session.setdefault("candidate", {})
+    candidate["interview_plan"] = plan
+    skills = list(plan.get("skill_names") or [])
+    if skills:
+        candidate["skills"] = skills
+        session.setdefault("job_requirements", {})["interview_skills"] = skills
+
+
 @app.post("/api/preview-agenda")
 async def preview_agenda(payload: dict = None):
     """Show the recruiter/candidate what this interview will cover before the mic opens."""
@@ -1223,6 +1260,8 @@ async def preview_agenda(payload: dict = None):
             _qbank.load()
         except Exception:
             pass
+    cached = profile.get("interview_plan") or {}
+    cached_names = list(cached.get("skill_names") or [])
     plan = build_interview_plan(
         {
             "name": features.get("name") or "",
@@ -1235,6 +1274,16 @@ async def preview_agenda(payload: dict = None):
         },
         question_bank_rag=_qbank if getattr(_qbank, "is_ready", False) else None,
     )
+    if (
+        cached.get("skill_questions_source") == "qwen"
+        and cached_names == list(plan.get("skill_names") or [])
+        and cached.get("skill_slots")
+    ):
+        plan = cached
+    else:
+        plan = await _qwen_fill_skill_plan(plan, features, sift, features.get("raw_text") or "")
+        profile["interview_plan"] = plan
+        session_store.save_resume_profile(str(resume_token), profile)
     duration = int(plan.get("duration_seconds") or INTERVIEW_DURATION_SECONDS)
     name = features.get("name") or "Candidate"
     greeting = opening_greeting(
@@ -1291,8 +1340,31 @@ async def start_interview(payload: dict = None):
         custom_features["resume_token"] = str(resume_token)
 
     session = _make_session(custom_features, role_override=role_override, raw_resume_text=raw_text, job_description=job_description)
+    profile = session_store.get_resume_profile(str(resume_token)) if resume_token else None
+    cached_plan = (profile or {}).get("interview_plan") or {}
+    live_names = list((session.get("interview_plan") or {}).get("skill_names") or [])
+    if (
+        cached_plan.get("skill_questions_source") == "qwen"
+        and list(cached_plan.get("skill_names") or []) == live_names
+        and cached_plan.get("skill_slots")
+    ):
+        _apply_plan_to_session(session, cached_plan)
+    else:
+        filled = await _qwen_fill_skill_plan(
+            session.get("interview_plan") or {},
+            custom_features,
+            None,
+            raw_text or "",
+        )
+        _apply_plan_to_session(session, filled)
+        if profile is not None and resume_token:
+            profile["interview_plan"] = filled
+            session_store.save_resume_profile(str(resume_token), profile)
     session_id = session["session_id"]
+    if not session.get("started_at"):
+        session["started_at"] = session.get("created_at") or time.time()
     session_store.save_session(session_id, session)
+    _schedule_persist(session_id)
     jr = session.get("job_requirements") or {}
     _safe_log(
         f"[Start Interview] session={session_id} role={jr.get('title')} "
@@ -1302,6 +1374,7 @@ async def start_interview(payload: dict = None):
     clean_session = {
         "session_id": session_id,
         "created_at": session["created_at"],
+        "started_at": session.get("started_at") or session["created_at"],
         "candidate": cand,
         "job_requirements": session["job_requirements"],
         "interview_state": session["interview_state"],
@@ -1333,6 +1406,13 @@ async def get_interview_history(session_id: str):
         session = await asyncio.to_thread(interview_store.get_interview, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Interview session not found")
+    from backend.store import interview_timing
+
+    timing = interview_timing(
+        session.get("started_at") or session.get("created_at"),
+        session.get("ended_at"),
+        session.get("duration_seconds"),
+    )
     return {
         "status": "ok",
         "session_id": session_id,
@@ -1340,7 +1420,8 @@ async def get_interview_history(session_id: str):
         "stage": session.get("interview_state", {}).get("stage"),
         "difficulty": session.get("interview_state", {}).get("difficulty_level"),
         "total_turns": len(session.get("history", [])),
-        "history": session.get("history", [])
+        "history": session.get("history", []),
+        **timing,
     }
 
 
@@ -1361,6 +1442,13 @@ async def end_interview(payload: dict):
         raise HTTPException(status_code=404, detail="Interview session was not found")
 
     finish = await _finish_interview(session)
+    from backend.store import interview_timing
+
+    timing = interview_timing(
+        session.get("started_at"),
+        session.get("ended_at"),
+        session.get("duration_seconds"),
+    )
     return {
         "status": "ok",
         "session_id": session_id,
@@ -1368,6 +1456,7 @@ async def end_interview(payload: dict):
         "persisted": finish.get("persisted"),
         "turns": finish.get("turns"),
         "interview_complete": True,
+        **timing,
     }
 
 
@@ -1832,10 +1921,32 @@ async def upload_resume(file: UploadFile = File(None), text_content: str = Form(
         features["raw_text"] = raw_text[:6000]
 
         resume_token = str(uuid.uuid4())
+        from rag_engine import question_bank_rag as _qbank
+        from backend.interview_plan import build_interview_plan
+        if _qbank and not getattr(_qbank, "is_ready", False):
+            try:
+                _qbank.load()
+            except Exception:
+                pass
+        sift = sift_skills_for_role(features)
+        plan = build_interview_plan(
+            {
+                "name": features.get("name") or "",
+                "skills": list(sift.get("intersection") or features.get("skills") or []),
+                "projects": list(sift.get("interview_projects") or features.get("projects") or []),
+                "resume_text": raw_text,
+                "bank_track": sift["bank_track"],
+                "target_track": sift["track"],
+                "interview_style": sift["style"],
+            },
+            question_bank_rag=_qbank if getattr(_qbank, "is_ready", False) else None,
+        )
+        plan = await _qwen_fill_skill_plan(plan, features, sift, raw_text)
         session_store.save_resume_profile(resume_token, {
             "features": features,
             "raw_text": raw_text,
             "filename": filename,
+            "interview_plan": plan,
         })
 
         new_prompt = generate_system_prompt_from_features(features)
@@ -2033,188 +2144,10 @@ async def _whisper_live_interview(client_ws: WebSocket, mode: str, session_id: O
 
 @app.websocket("/ws/live-interview")
 async def websocket_live_interview(client_ws: WebSocket, mode: str = "interview", session_id: Optional[str] = None):
-    """
-    Live mic PCM16 → STT → browser captions.
-
-    Default is Groq Whisper large-v3-turbo (API key). Set STT_PROVIDER=whisper
-    for local faster-whisper, or nemotron for the remote FastConformer socket.
-    """
-    from interviewer.config import settings as speech_cfg
-
+    """Live mic PCM16 → Whisper captions. Nemotron is not used."""
     if not await _authorize_interview_ws(client_ws):
         return
-    if speech_cfg.speech.stt_provider.lower() != "nemotron":
-        await _whisper_live_interview(client_ws, mode, session_id)
-        return
-
-    await client_ws.accept()
-
-    live_session = load_live_session(session_id) if session_id else None
-
-    ssl_context = ssl.create_default_context()
-    if os.environ.get("STT_TLS_INSECURE", "").strip().lower() in ("1", "true", "yes"):
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-
-    remote_url = f"{STT_WS_URL}?sample_rate=16000&channels=1"
-
-    remote_ws = None
-    remote_reader_task = None
-    is_resetting = False
-
-    async def connect_remote():
-        return await websockets.connect(
-            remote_url,
-            ssl=ssl_context,
-            user_agent_header="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
-            open_timeout=15,
-            ping_interval=20,
-            ping_timeout=20,
-            max_size=10 * 1024 * 1024,
-        )
-
-    async def remote_reader(ws_conn):
-        try:
-            async for message in ws_conn:
-                if is_resetting:
-                    continue
-                if isinstance(message, bytes):
-                    message = message.decode("utf-8", errors="replace")
-                try:
-                    data = json.loads(message)
-                    text = data.get("text")
-                    if text is not None:
-                        if mode == "interview":
-                            if live_session:
-                                output_text = correct_transcript_fast(
-                                    text,
-                                    candidate_dict=live_session.get("candidate") or {},
-                                    hotwords=live_session.get("cv_hotwords") or [],
-                                    phonetic_patterns=live_session.get("phonetic_patterns") or [],
-                                    active_topic=_stt_active_topic(live_session),
-                                )
-                            else:
-                                output_text = clean_transcript(text)
-                        else:
-                            output_text = text
-                        await client_ws.send_json({"type": "transcript", "text": output_text})
-                except Exception:
-                    pass
-        except (WebSocketDisconnect, asyncio.CancelledError):
-            pass
-        except Exception as exc:
-            print(f"[WS Relay] Remote Reader Error: {exc}")
-
-    def is_ws_closed(ws_obj):
-        if ws_obj is None:
-            return True
-        try:
-            state = getattr(ws_obj, "state", None)
-            if state is not None:
-                val = getattr(state, "value", state)
-                return int(val) != 1
-        except Exception:
-            pass
-        return False
-
-    try:
-        remote_ws = await connect_remote()
-        remote_reader_task = asyncio.create_task(remote_reader(remote_ws))
-
-        while True:
-            data = await client_ws.receive()
-            msg_type = data.get("type", "")
-            if msg_type == "websocket.disconnect":
-                break
-
-            if "bytes" in data and data["bytes"]:
-                if (not remote_ws or is_ws_closed(remote_ws)) and not is_resetting:
-                    try:
-                        remote_ws = await connect_remote()
-                        if remote_reader_task:
-                            remote_reader_task.cancel()
-                        remote_reader_task = asyncio.create_task(remote_reader(remote_ws))
-                    except Exception:
-                        pass
-
-                if remote_ws and not is_resetting:
-                    try:
-                        await remote_ws.send(data["bytes"])
-                    except Exception as e:
-                        print(f"[WS Relay Audio Send Error]: {e}")
-                        try:
-                            remote_ws = await connect_remote()
-                            if remote_reader_task:
-                                remote_reader_task.cancel()
-                            remote_reader_task = asyncio.create_task(remote_reader(remote_ws))
-                        except Exception:
-                            pass
-
-            elif "text" in data and data["text"]:
-                try:
-                    payload = json.loads(data["text"])
-                    action = payload.get("action")
-
-                    if action == "reset":
-                        # Cleanly recycle remote STT connection to wipe cached hypothesis
-                        is_resetting = True
-                        if remote_reader_task:
-                            remote_reader_task.cancel()
-                            remote_reader_task = None
-                        if remote_ws:
-                            try:
-                                await remote_ws.close()
-                            except Exception:
-                                pass
-                            remote_ws = None
-
-                        try:
-                            remote_ws = await connect_remote()
-                            remote_reader_task = asyncio.create_task(remote_reader(remote_ws))
-                            await client_ws.send_json({"type": "reset_ack"})
-                            print("[WS Relay] STT connection successfully reset for new turn.")
-                        except Exception as conn_err:
-                            print(f"[WS Relay Reset Connection Error]: {conn_err}")
-                            try:
-                                await client_ws.send_json({"type": "reset_ack", "degraded": True})
-                            except Exception:
-                                pass
-                        finally:
-                            is_resetting = False
-
-                    elif action == "flush":
-                        if remote_ws and not is_resetting:
-                            # 160 ms of silence @ 16 kHz mono PCM16 — matches encoder chunking
-                            silence = b"\x00" * 5120
-                            for _ in range(3):
-                                await remote_ws.send(silence)
-                                await asyncio.sleep(0.16)
-
-                    elif action == "stop":
-                        break
-                except Exception as exc:
-                    print(f"[WS Relay Action Error]: {exc}")
-
-    except (WebSocketDisconnect, asyncio.CancelledError):
-        pass
-    except Exception as exc:
-        print(f"[WS Relay Error]: {exc}")
-        try:
-            await client_ws.send_json({"type": "error", "message": f"STT Connection error: {exc}"})
-        except Exception:
-            pass
-    finally:
-        if remote_reader_task:
-            remote_reader_task.cancel()
-        if remote_ws:
-            try:
-                await remote_ws.close()
-            except Exception:
-                pass
-        try:
-            await client_ws.close()
-        except Exception:
-            pass
+    await _whisper_live_interview(client_ws, mode, session_id)
 
 
 if __name__ == "__main__":

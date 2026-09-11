@@ -1314,6 +1314,12 @@ body {
   border-color: var(--accent-cyan);
 }
 
+.history-timing {
+  margin: 8px 0 16px;
+  font-size: 13px;
+  color: var(--text-muted, #6b7280);
+}
+
 .turn-block {
   margin: 10px 0;
   padding: 10px;

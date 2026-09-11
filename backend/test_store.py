@@ -10,7 +10,9 @@ def _session(sid="sess-1", turns=2):
     return {
         "session_id": sid,
         "created_at": 1000.0,
+        "started_at": 1100.0,
         "ended_at": 2000.0,
+        "duration_seconds": 900,
         "candidate": {"name": "Priya Sharma", "target_role": "AI / ML Engineer", "target_track": "aiml"},
         "job_requirements": {"title": "AI / ML Engineer", "intersection": ["Python"]},
         "interview_state": {"stage": "completed", "difficulty_level": 3},
@@ -55,6 +57,11 @@ def test_transcript_round_trip():
     assert loaded["history"][0]["asked_question"] == "Question 1?"
     assert loaded["history"][0]["expected_concepts"] == ["pretrained backbone"]
     assert loaded["history"][1]["turn"] == 2
+    assert loaded["started_at"] == 1100.0
+    assert loaded["ended_at"] == 2000.0
+    assert loaded["duration_seconds"] == 900
+    assert loaded["started_at_iso"] == "1970-01-01T00:18:20Z"
+    assert loaded["ended_at_iso"] == "1970-01-01T00:33:20Z"
     print("[OK] Transcript round-trips with questions, answers, and rubric intact.")
 
 
@@ -95,6 +102,10 @@ def test_report_outlives_and_joins():
     assert row["candidate_name"] == "Priya Sharma"
     assert row["overall_score"] == 3.8
     assert row["turn_count"] == 2
+    assert row["started_at"] == 1100.0
+    assert row["ended_at"] == 2000.0
+    assert row["duration_seconds"] == 900
+    assert row["started_at_iso"].endswith("Z")
     print(f"[OK] Listing joins score to interview: {row['candidate_name']} {row['overall_score']}/5 {row['recommendation']}")
 
 
@@ -124,10 +135,34 @@ def test_filters_and_missing():
     print("[OK] Role/recommendation filters work; missing ids return None.")
 
 
+def test_started_at_survives_upsert_and_end():
+    store, _ = _fresh_store()
+    live = _session()
+    live["ended_at"] = None
+    live["duration_seconds"] = None
+    store.save_interview(live)
+
+    mid = store.get_interview("sess-1")
+    assert mid["started_at"] == 1100.0
+    assert mid["ended_at"] is None
+    assert mid["duration_seconds"] is None
+
+    live["started_at"] = 9999.0  # later persist must not move start
+    live["ended_at"] = 2000.0
+    live["duration_seconds"] = None
+    store.save_interview(live)
+    done = store.get_interview("sess-1")
+    assert done["started_at"] == 1100.0
+    assert done["ended_at"] == 2000.0
+    assert done["duration_seconds"] == 900
+    print("[OK] Start time is sticky; end time and duration write once the interview finishes.")
+
+
 if __name__ == "__main__":
     test_transcript_round_trip()
     test_upsert_is_idempotent()
     test_report_outlives_and_joins()
     test_survives_reopen()
     test_filters_and_missing()
+    test_started_at_survives_upsert_and_end()
     print("\n[SUCCESS] Durable interview store verified.")
