@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+.env
+resume.txt
+system_prompt.txt
+*.db
+
+.DS_Store
+interviews.db
+interviews.db-wal
+interviews.db-shm
+dry_run_compare.json

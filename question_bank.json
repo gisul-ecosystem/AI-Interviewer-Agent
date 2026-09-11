@@ -1,0 +1,1087 @@
+{
+  "schema_version": 2,
+  "questions": [
+    {
+      "id": "aiml-project-ownership-01",
+      "tracks": [
+        "aiml"
+      ],
+      "competency": "project_ownership",
+      "topic": "resume_project",
+      "difficulty": 1,
+      "question": "Choose one project from your resume. What problem did it solve, what did you personally own, and how did you know it was useful?",
+      "expected_concepts": [
+        "problem",
+        "personal contribution",
+        "evaluation"
+      ],
+      "strong_signals": [
+        "states a concrete responsibility",
+        "connects an outcome to a metric or user need"
+      ],
+      "weak_signals": [
+        "describes only the team",
+        "cannot explain the project goal"
+      ],
+      "follow_up_ids": [
+        "aiml-project-architecture-02"
+      ]
+    },
+    {
+      "id": "aiml-project-architecture-02",
+      "tracks": [
+        "aiml"
+      ],
+      "competency": "system_design",
+      "topic": "project_architecture",
+      "difficulty": 2,
+      "question": "Walk me through the path from raw input to prediction in your project. Where did validation and error handling happen?",
+      "expected_concepts": [
+        "input",
+        "preprocessing",
+        "inference",
+        "validation",
+        "error handling"
+      ],
+      "strong_signals": [
+        "explains the full data flow",
+        "identifies a realistic failure case"
+      ],
+      "weak_signals": [
+        "jumps directly from input to output",
+        "has no validation strategy"
+      ],
+      "follow_up_ids": [
+        "aiml-project-reliability-03"
+      ]
+    },
+    {
+      "id": "aiml-project-reliability-03",
+      "tracks": [
+        "aiml"
+      ],
+      "competency": "reliability",
+      "topic": "ml_system_reliability",
+      "difficulty": 3,
+      "question": "What input or model failure worried you most in that system, and how would you detect and handle it safely?",
+      "expected_concepts": [
+        "failure mode",
+        "detection",
+        "fallback",
+        "monitoring"
+      ],
+      "strong_signals": [
+        "names a concrete failure",
+        "proposes detection before mitigation"
+      ],
+      "weak_signals": [
+        "assumes the model always works",
+        "suggests retraining without diagnosis"
+      ],
+      "follow_up_ids": []
+    },
+    {
+      "id": "aiml-data-split-01",
+      "tracks": [
+        "aiml"
+      ],
+      "competency": "data_validation",
+      "topic": "dataset_split",
+      "difficulty": 2,
+      "question": "How did you split training, validation, and test data, and what leakage risk did you check for?",
+      "expected_concepts": [
+        "train validation test",
+        "leakage",
+        "representative split"
+      ],
+      "strong_signals": [
+        "explains why the split matches the data",
+        "identifies a leakage path"
+      ],
+      "weak_signals": [
+        "uses a split without justification",
+        "confuses validation with test data"
+      ],
+      "follow_up_ids": [
+        "aiml-data-imbalance-02"
+      ]
+    },
+    {
+      "id": "aiml-data-imbalance-02",
+      "tracks": [
+        "aiml"
+      ],
+      "competency": "data_validation",
+      "topic": "class_imbalance",
+      "difficulty": 3,
+      "question": "If the important class was rare, how would you measure whether the model was really helping rather than just predicting the majority class?",
+      "expected_concepts": [
+        "class imbalance",
+        "precision",
+        "recall",
+        "f1 or pr auc"
+      ],
+      "strong_signals": [
+        "rejects accuracy as the only metric",
+        "connects metric choice to the cost of errors"
+      ],
+      "weak_signals": [
+        "uses only accuracy",
+        "cannot distinguish false positives and false negatives"
+      ],
+      "follow_up_ids": []
+    },
+    {
+      "id": "aiml-metrics-01",
+      "tracks": [
+        "aiml"
+      ],
+      "competency": "model_evaluation",
+      "topic": "classification_metrics",
+      "difficulty": 2,
+      "question": "Which metric mattered most for your classifier, and why was it better than accuracy for that decision?",
+      "expected_concepts": [
+        "metric choice",
+        "precision or recall",
+        "error cost"
+      ],
+      "strong_signals": [
+        "ties the metric to the real decision",
+        "explains the cost of a false positive or false negative"
+      ],
+      "weak_signals": [
+        "selects a metric by popularity",
+        "cannot explain what it measures"
+      ],
+      "follow_up_ids": [
+        "aiml-metrics-threshold-02"
+      ]
+    },
+    {
+      "id": "aiml-metrics-threshold-02",
+      "tracks": [
+        "aiml"
+      ],
+      "competency": "model_evaluation",
+      "topic": "decision_threshold",
+      "difficulty": 3,
+      "question": "How would changing the prediction threshold affect precision and recall, and how would you choose a threshold for a real user?",
+      "expected_concepts": [
+        "threshold",
+        "precision recall trade-off",
+        "validation data",
+        "business cost"
+      ],
+      "strong_signals": [
+        "describes the trade-off correctly",
+        "uses validation or cost to choose the threshold"
+      ],
+      "weak_signals": [
+        "treats 0.5 as universally correct",
+        "confuses probability with class label"
+      ],
+      "follow_up_ids": []
+    },
+    {
+      "id": "aiml-training-loop-01",
+      "tracks": [
+        "aiml"
+      ],
+      "competency": "model_training",
+      "topic": "pytorch_training",
+      "difficulty": 2,
+      "question": "In your PyTorch training loop, what happened in one epoch from loading a batch through updating the model?",
+      "expected_concepts": [
+        "forward pass",
+        "loss",
+        "backward pass",
+        "optimizer step"
+      ],
+      "strong_signals": [
+        "explains the order correctly",
+        "mentions train and evaluation modes when relevant"
+      ],
+      "weak_signals": [
+        "cannot explain gradients",
+        "updates weights before computing loss"
+      ],
+      "follow_up_ids": [
+        "aiml-training-overfit-02"
+      ]
+    },
+    {
+      "id": "aiml-training-overfit-02",
+      "tracks": [
+        "aiml"
+      ],
+      "competency": "model_training",
+      "topic": "overfitting",
+      "difficulty": 3,
+      "question": "What evidence would tell you the model was overfitting, and which intervention would you try first?",
+      "expected_concepts": [
+        "train validation gap",
+        "regularization",
+        "augmentation or early stopping"
+      ],
+      "strong_signals": [
+        "uses validation behavior as evidence",
+        "chooses an intervention with a reason"
+      ],
+      "weak_signals": [
+        "calls every low score overfitting",
+        "changes many variables without measurement"
+      ],
+      "follow_up_ids": []
+    },
+    {
+      "id": "aiml-cnn-transfer-01",
+      "tracks": [
+        "aiml"
+      ],
+      "competency": "deep_learning",
+      "topic": "cnn_transfer_learning",
+      "difficulty": 3,
+      "question": "For an image classifier with limited labelled data, when would you use transfer learning and which layers would you fine-tune first?",
+      "expected_concepts": [
+        "pretrained backbone",
+        "limited data",
+        "freeze layers",
+        "fine tuning"
+      ],
+      "strong_signals": [
+        "explains why early features transfer",
+        "describes a staged fine-tuning plan"
+      ],
+      "weak_signals": [
+        "always trains from scratch",
+        "cannot explain freezing"
+      ],
+      "follow_up_ids": []
+    },
+    {
+      "id": "aiml-feature-engineering-01",
+      "tracks": [
+        "aiml"
+      ],
+      "competency": "feature_engineering",
+      "topic": "tabular_ml",
+      "difficulty": 2,
+      "question": "How did you decide which input features were useful, and how did you make sure preprocessing was applied consistently at inference time?",
+      "expected_concepts": [
+        "feature rationale",
+        "fit transform separation",
+        "pipeline consistency"
+      ],
+      "strong_signals": [
+        "avoids fitting preprocessing on test data",
+        "explains feature value"
+      ],
+      "weak_signals": [
+        "uses all columns blindly",
+        "preprocessing differs between training and inference"
+      ],
+      "follow_up_ids": []
+    },
+    {
+      "id": "aiml-rag-chunking-01",
+      "tracks": [
+        "aiml"
+      ],
+      "competency": "rag_design",
+      "topic": "rag_chunking",
+      "difficulty": 2,
+      "question": "How would you choose chunk size and overlap for a RAG system, and what trade-off would you expect?",
+      "expected_concepts": [
+        "chunk size",
+        "overlap",
+        "retrieval context",
+        "trade-off"
+      ],
+      "strong_signals": [
+        "connects chunking to document structure and retrieval",
+        "recognises recall versus noise"
+      ],
+      "weak_signals": [
+        "chooses arbitrary values",
+        "assumes bigger chunks are always better"
+      ],
+      "follow_up_ids": [
+        "aiml-rag-evaluation-02"
+      ]
+    },
+    {
+      "id": "aiml-rag-evaluation-02",
+      "tracks": [
+        "aiml"
+      ],
+      "competency": "rag_design",
+      "topic": "rag_evaluation",
+      "difficulty": 3,
+      "question": "How would you tell whether poor answers came from retrieval, the prompt, or the language model itself?",
+      "expected_concepts": [
+        "retrieval evaluation",
+        "groundedness",
+        "test set",
+        "component isolation"
+      ],
+      "strong_signals": [
+        "separates pipeline components",
+        "proposes representative evaluation cases"
+      ],
+      "weak_signals": [
+        "changes the model first",
+        "has no way to inspect retrieved context"
+      ],
+      "follow_up_ids": []
+    },
+    {
+      "id": "aiml-llm-guardrails-01",
+      "tracks": [
+        "aiml"
+      ],
+      "competency": "llm_engineering",
+      "topic": "llm_guardrails",
+      "difficulty": 3,
+      "question": "What guardrails would you put around an LLM feature before showing its output to a user?",
+      "expected_concepts": [
+        "input validation",
+        "output validation",
+        "grounding",
+        "fallback or human review"
+      ],
+      "strong_signals": [
+        "covers both input and output",
+        "explains a failure path"
+      ],
+      "weak_signals": [
+        "relies only on the system prompt",
+        "assumes a model refusal is enough"
+      ],
+      "follow_up_ids": []
+    },
+    {
+      "id": "aiml-deployment-01",
+      "tracks": [
+        "aiml"
+      ],
+      "competency": "ml_deployment",
+      "topic": "model_serving",
+      "difficulty": 2,
+      "question": "How would you package a trained model for an API, and what inputs would you validate before running inference?",
+      "expected_concepts": [
+        "model artifact",
+        "versioning",
+        "input schema",
+        "validation"
+      ],
+      "strong_signals": [
+        "separates training artifact from service",
+        "validates shape and type"
+      ],
+      "weak_signals": [
+        "loads a notebook directly in production",
+        "trusts every input"
+      ],
+      "follow_up_ids": [
+        "aiml-deployment-monitoring-02"
+      ]
+    },
+    {
+      "id": "aiml-deployment-monitoring-02",
+      "tracks": [
+        "aiml"
+      ],
+      "competency": "ml_deployment",
+      "topic": "model_monitoring",
+      "difficulty": 3,
+      "question": "After deployment, which signals would you monitor to catch performance or data drift before users report a problem?",
+      "expected_concepts": [
+        "latency",
+        "errors",
+        "data drift",
+        "prediction quality"
+      ],
+      "strong_signals": [
+        "includes service and model metrics",
+        "explains how labels or feedback close the loop"
+      ],
+      "weak_signals": [
+        "monitors only uptime",
+        "cannot detect model quality decay"
+      ],
+      "follow_up_ids": []
+    },
+    {
+      "id": "aiml-debugging-01",
+      "tracks": [
+        "aiml"
+      ],
+      "competency": "debugging",
+      "topic": "ml_debugging",
+      "difficulty": 2,
+      "question": "Tell me about a model result that looked wrong. What did you check first, and how did you narrow down the cause?",
+      "expected_concepts": [
+        "hypothesis",
+        "data check",
+        "baseline",
+        "isolation"
+      ],
+      "strong_signals": [
+        "uses a systematic sequence",
+        "starts with data or reproducibility"
+      ],
+      "weak_signals": [
+        "changes code randomly",
+        "cannot name a diagnostic step"
+      ],
+      "follow_up_ids": []
+    },
+    {
+      "id": "aiml-communication-01",
+      "tracks": [
+        "aiml"
+      ],
+      "competency": "technical_communication",
+      "topic": "stakeholder_communication",
+      "difficulty": 2,
+      "question": "How would you explain a model limitation to a non-technical stakeholder without hiding the risk?",
+      "expected_concepts": [
+        "plain language",
+        "limitation",
+        "risk",
+        "mitigation"
+      ],
+      "strong_signals": [
+        "balances clarity and honesty",
+        "offers an actionable mitigation"
+      ],
+      "weak_signals": [
+        "uses unexplained jargon",
+        "promises certainty"
+      ],
+      "follow_up_ids": []
+    },
+    {
+      "id": "cs-oop-polymorphism-01",
+      "tracks": [
+        "software_engineering",
+        "aiml",
+        "general_cs"
+      ],
+      "competency": "object_oriented_programming",
+      "topic": "polymorphism",
+      "difficulty": 2,
+      "question": "Can you explain the difference between compile-time and runtime polymorphism with a concrete example?",
+      "expected_concepts": [
+        "compile time",
+        "runtime",
+        "method overloading",
+        "method overriding",
+        "dynamic dispatch"
+      ],
+      "strong_signals": [
+        "distinguishes overloading from overriding accurately",
+        "explains dynamic method dispatch at runtime"
+      ],
+      "weak_signals": [
+        "confuses overloading and overriding",
+        "cannot explain when resolution occurs"
+      ],
+      "follow_up_ids": [
+        "cs-oop-composition-02"
+      ]
+    },
+    {
+      "id": "cs-oop-composition-02",
+      "tracks": [
+        "software_engineering",
+        "aiml",
+        "general_cs"
+      ],
+      "competency": "object_oriented_programming",
+      "topic": "composition_vs_inheritance",
+      "difficulty": 3,
+      "question": "Why is 'composition over inheritance' widely recommended in system design, and when would inheritance be a poor choice?",
+      "expected_concepts": [
+        "composition",
+        "inheritance",
+        "tight coupling",
+        "fragile base class",
+        "has-a vs is-a",
+        "flexibility"
+      ],
+      "strong_signals": [
+        "mentions tight coupling or fragile base class problem",
+        "explains runtime flexibility of composition"
+      ],
+      "weak_signals": [
+        "claims inheritance is always better for code reuse",
+        "cannot define has-a vs is-a"
+      ],
+      "follow_up_ids": [
+        "cs-oop-solid-03"
+      ]
+    },
+    {
+      "id": "cs-oop-solid-03",
+      "tracks": [
+        "software_engineering",
+        "aiml",
+        "general_cs"
+      ],
+      "competency": "object_oriented_programming",
+      "topic": "solid_principles",
+      "difficulty": 4,
+      "question": "Walk me through how the Open-Closed Principle or Liskov Substitution Principle prevents regression bugs in large codebases.",
+      "expected_concepts": [
+        "open closed",
+        "liskov substitution",
+        "subtyping",
+        "invariants",
+        "interfaces",
+        "extensibility"
+      ],
+      "strong_signals": [
+        "explains extending behavior without modifying source code",
+        "demonstrates breaking LSP with unexpected subclass behavior"
+      ],
+      "weak_signals": [
+        "simply recites the acronym without architectural intuition",
+        "cannot give a failure scenario"
+      ],
+      "follow_up_ids": []
+    },
+    {
+      "id": "cs-java-memory-01",
+      "tracks": [
+        "software_engineering",
+        "general_cs"
+      ],
+      "competency": "java",
+      "topic": "jvm_memory_model",
+      "difficulty": 3,
+      "question": "How does the JVM distinguish between Stack and Heap memory, and what causes an OutOfMemoryError versus a StackOverflowError?",
+      "expected_concepts": [
+        "stack",
+        "heap",
+        "stack frame",
+        "objects",
+        "garbage collection",
+        "outofmemoryerror",
+        "stackoverflowerror",
+        "recursion"
+      ],
+      "strong_signals": [
+        "explains method frames and primitives on stack vs objects on heap",
+        "connects deep recursion to stack overflow and memory leaks to OOM"
+      ],
+      "weak_signals": [
+        "confuses stack and heap allocations",
+        "believes garbage collection frees stack frames"
+      ],
+      "follow_up_ids": [
+        "cs-java-hashmap-02"
+      ]
+    },
+    {
+      "id": "cs-java-hashmap-02",
+      "tracks": [
+        "software_engineering",
+        "general_cs"
+      ],
+      "competency": "java",
+      "topic": "hashmap_internals",
+      "difficulty": 4,
+      "question": "How does Java's HashMap work internally, how are collisions resolved, and why is the equals and hashCode contract critical?",
+      "expected_concepts": [
+        "hashcode",
+        "equals",
+        "buckets",
+        "collision",
+        "linkedlist",
+        "red-black tree",
+        "treeify threshold",
+        "load factor"
+      ],
+      "strong_signals": [
+        "explains bucketing, linked list chaining, and treeify conversion at threshold 8",
+        "details what happens when hashCode is inconsistent with equals"
+      ],
+      "weak_signals": [
+        "assumes hashmap has zero collisions",
+        "cannot explain why equals is needed after hashcode match"
+      ],
+      "follow_up_ids": [
+        "cs-java-concurrency-03"
+      ]
+    },
+    {
+      "id": "cs-java-concurrency-03",
+      "tracks": [
+        "software_engineering",
+        "general_cs"
+      ],
+      "competency": "java",
+      "topic": "java_concurrency",
+      "difficulty": 4,
+      "question": "What is the key difference between the volatile keyword and synchronized blocks in Java multithreading?",
+      "expected_concepts": [
+        "volatile",
+        "synchronized",
+        "visibility",
+        "atomicity",
+        "cpu cache",
+        "memory barrier",
+        "race condition",
+        "lock"
+      ],
+      "strong_signals": [
+        "articulates that volatile guarantees memory visibility but not atomicity",
+        "explains mutual exclusion with synchronized"
+      ],
+      "weak_signals": [
+        "thinks volatile makes operations like count++ atomic",
+        "cannot explain memory visibility"
+      ],
+      "follow_up_ids": []
+    },
+    {
+      "id": "cs-python-gil-01",
+      "tracks": [
+        "software_engineering",
+        "aiml",
+        "general_cs"
+      ],
+      "competency": "python",
+      "topic": "python_gil_and_concurrency",
+      "difficulty": 3,
+      "question": "What is Python's Global Interpreter Lock (GIL), and why does multithreading not speed up CPU-bound workloads in CPython?",
+      "expected_concepts": [
+        "gil",
+        "global interpreter lock",
+        "cpython",
+        "thread safety",
+        "reference counting",
+        "cpu bound",
+        "multiprocessing",
+        "io bound"
+      ],
+      "strong_signals": [
+        "explains reference counting safety and GIL mutex",
+        "recommends multiprocessing or asyncio depending on CPU vs I/O bound tasks"
+      ],
+      "weak_signals": [
+        "assumes threads always run on multiple CPU cores in Python",
+        "cannot differentiate CPU-bound from I/O-bound"
+      ],
+      "follow_up_ids": [
+        "cs-python-generators-02"
+      ]
+    },
+    {
+      "id": "cs-python-generators-02",
+      "tracks": [
+        "software_engineering",
+        "aiml",
+        "general_cs"
+      ],
+      "competency": "python",
+      "topic": "generators_and_iterators",
+      "difficulty": 3,
+      "question": "How do Python generators work with the yield statement, and why are they preferable to lists for large-scale data pipelines?",
+      "expected_concepts": [
+        "generator",
+        "yield",
+        "lazy evaluation",
+        "memory efficiency",
+        "iterator protocol",
+        "state suspension"
+      ],
+      "strong_signals": [
+        "explains memory footprint reduction and lazy evaluation",
+        "describes how yield suspends execution state and frame"
+      ],
+      "weak_signals": [
+        "confuses return and yield",
+        "does not mention memory or lazy streaming"
+      ],
+      "follow_up_ids": []
+    },
+    {
+      "id": "cs-sql-indexes-01",
+      "tracks": [
+        "software_engineering",
+        "aiml",
+        "general_cs"
+      ],
+      "competency": "database_systems",
+      "topic": "sql_indexing",
+      "difficulty": 3,
+      "question": "How does a B-Tree index speed up SELECT queries in MySQL, and what is the trade-off when performing heavy INSERT or UPDATE operations?",
+      "expected_concepts": [
+        "b-tree",
+        "index",
+        "clustered index",
+        "binary search",
+        "logarithmic time",
+        "insert update overhead",
+        "index rebalancing"
+      ],
+      "strong_signals": [
+        "explains log(N) search and leaf node lookup",
+        "notes that writes suffer due to index tree rebalancing and page splits"
+      ],
+      "weak_signals": [
+        "thinks indexes speed up both reads and writes",
+        "cannot explain how an index structures data"
+      ],
+      "follow_up_ids": [
+        "cs-sql-acid-02"
+      ]
+    },
+    {
+      "id": "cs-sql-acid-02",
+      "tracks": [
+        "software_engineering",
+        "general_cs"
+      ],
+      "competency": "database_systems",
+      "topic": "acid_and_transactions",
+      "difficulty": 4,
+      "question": "Can you explain the difference between Read Committed and Repeatable Read isolation levels, and what anomalies each prevents?",
+      "expected_concepts": [
+        "acid",
+        "isolation level",
+        "read committed",
+        "repeatable read",
+        "dirty read",
+        "non-repeatable read",
+        "phantom read",
+        "lock"
+      ],
+      "strong_signals": [
+        "clearly explains dirty reads vs non-repeatable reads",
+        "mentions multi-version concurrency control (MVCC) or snapshots"
+      ],
+      "weak_signals": [
+        "recites ACID without knowing what isolation levels mean",
+        "confuses consistency with durability"
+      ],
+      "follow_up_ids": []
+    },
+    {
+      "id": "cs-dsa-hash-table-01",
+      "tracks": [
+        "software_engineering",
+        "aiml",
+        "general_cs"
+      ],
+      "competency": "data_structures",
+      "topic": "hash_table_complexity",
+      "difficulty": 2,
+      "question": "Why is hash table lookup O(1) on average, but what causes it to degrade to O(N), and how do you prevent that?",
+      "expected_concepts": [
+        "o(1)",
+        "hash table",
+        "hash collision",
+        "worst case o(n)",
+        "chaining",
+        "load factor",
+        "rehashing",
+        "uniform hashing"
+      ],
+      "strong_signals": [
+        "explains hash collision clustering and load factor threshold triggering rehashing",
+        "mentions good hash distribution function"
+      ],
+      "weak_signals": [
+        "thinks hash tables are always strictly O(1) with no worst case",
+        "cannot describe collision handling"
+      ],
+      "follow_up_ids": [
+        "cs-dsa-lru-cache-02"
+      ]
+    },
+    {
+      "id": "cs-dsa-lru-cache-02",
+      "tracks": [
+        "software_engineering",
+        "aiml",
+        "general_cs"
+      ],
+      "competency": "data_structures",
+      "topic": "lru_cache_design",
+      "difficulty": 4,
+      "question": "How would you design a Least Recently Used (LRU) Cache so that both get() and put() run in O(1) time?",
+      "expected_concepts": [
+        "lru cache",
+        "hashmap",
+        "doubly linked list",
+        "o(1) time",
+        "eviction",
+        "head tail pointers",
+        "constant time"
+      ],
+      "strong_signals": [
+        "combines HashMap for O(1) lookup with Doubly Linked List for O(1) removal and insertion at head/tail",
+        "explains node pointer updates on access"
+      ],
+      "weak_signals": [
+        "proposes array or queue leading to O(N) search or shift",
+        "fails to achieve O(1) for both get and put"
+      ],
+      "follow_up_ids": [
+        "cs-dsa-two-pointers-03"
+      ]
+    },
+    {
+      "id": "cs-dsa-two-pointers-03",
+      "tracks": [
+        "software_engineering",
+        "aiml",
+        "general_cs"
+      ],
+      "competency": "data_structures",
+      "topic": "linked_list_cycle",
+      "difficulty": 2,
+      "question": "How would you detect a cycle in a linked list in linear time and constant extra memory?",
+      "expected_concepts": [
+        "floyd",
+        "two pointers",
+        "slow fast",
+        "linked list",
+        "o(1) space",
+        "cycle"
+      ],
+      "strong_signals": [
+        "describes Floyd's tortoise and hare pointers",
+        "explains why they must meet if a cycle exists"
+      ],
+      "weak_signals": [
+        "uses a hash set and extra memory",
+        "cannot justify linear time"
+      ],
+      "follow_up_ids": []
+    },
+    {
+      "id": "webd-project-ownership-01",
+      "tracks": ["webd", "frontend", "backend"],
+      "competency": "project_ownership",
+      "topic": "web_project",
+      "difficulty": 1,
+      "question": "Walk me through one web project on your resume. What did you personally build in the UI or API, and how did users hit it?",
+      "expected_concepts": ["personal contribution", "frontend or backend", "user flow"],
+      "strong_signals": ["names concrete screens or endpoints they owned"],
+      "weak_signals": ["only names the stack with no ownership"],
+      "follow_up_ids": ["webd-api-auth-01"]
+    },
+    {
+      "id": "webd-api-auth-01",
+      "tracks": ["webd", "backend"],
+      "competency": "api_auth",
+      "topic": "rest_auth",
+      "difficulty": 2,
+      "question": "How did you authenticate API requests in that app, and what happens when a token expires?",
+      "expected_concepts": ["auth", "session or jwt", "expiry"],
+      "strong_signals": ["explains token lifecycle and a failure path"],
+      "weak_signals": ["says login works with no detail"],
+      "follow_up_ids": []
+    },
+    {
+      "id": "webd-react-state-01",
+      "tracks": ["webd", "frontend"],
+      "competency": "frontend_state",
+      "topic": "react_state",
+      "difficulty": 2,
+      "question": "How did you manage client state in the UI, and how did you avoid unnecessary re-renders?",
+      "expected_concepts": ["state", "props", "re-render"],
+      "strong_signals": ["mentions lifting state, context, or a store with a reason"],
+      "weak_signals": ["only says used React"],
+      "follow_up_ids": []
+    },
+    {
+      "id": "hr-intro-01",
+      "tracks": ["hr"],
+      "competency": "communication",
+      "topic": "stakeholder_communication",
+      "difficulty": 1,
+      "question": "Tell me about a time you had to explain a sensitive update to a candidate or hiring manager. What did you say, and what was the outcome?",
+      "expected_concepts": ["communication", "audience", "outcome"],
+      "strong_signals": ["specific situation, action, and result"],
+      "weak_signals": ["generic I am a good communicator"],
+      "follow_up_ids": ["hr-conflict-01"]
+    },
+    {
+      "id": "hr-conflict-01",
+      "tracks": ["hr"],
+      "competency": "conflict_resolution",
+      "topic": "conflict",
+      "difficulty": 2,
+      "question": "Describe a disagreement between a hiring manager and a candidate process. How did you handle it without burning either side?",
+      "expected_concepts": ["conflict", "stakeholders", "process"],
+      "strong_signals": ["names the tension and a concrete step they took"],
+      "weak_signals": ["says they stay positive with no example"],
+      "follow_up_ids": []
+    },
+    {
+      "id": "hr-hiring-01",
+      "tracks": ["hr"],
+      "competency": "hiring",
+      "topic": "recruiting",
+      "difficulty": 2,
+      "question": "How do you decide whether a profile is a real match for a role versus a keyword match on the CV?",
+      "expected_concepts": ["role requirements", "cv evidence", "screening"],
+      "strong_signals": ["talks about evidence of skill, not just buzzwords"],
+      "weak_signals": ["only mentions years of experience"],
+      "follow_up_ids": []
+    }
+  ],
+  "rag": [
+    "You mentioned a RAG pipeline \u2014 how did you structure the document chunking strategy and what chunk size and overlap did you choose?",
+    "What embedding model did you use for vectorizing your documents, and why did you choose it over alternatives?",
+    "How did you handle documents that exceeded the context window limit of your LLM?",
+    "What vector store did you use \u2014 FAISS, Chroma, Pinecone \u2014 and why did you pick that over the others?",
+    "How did you evaluate the quality of retrieved context? Did you measure retrieval precision or use any framework like RAGAS or TruLens?",
+    "What retrieval strategy did you use \u2014 similarity search, MMR, or hybrid BM25 plus dense retrieval?",
+    "How did you handle cases where the retrieved chunks were irrelevant or contradicted each other before passing them to the LLM?"
+  ],
+  "langchain": [
+    "How did you structure your LangChain chain \u2014 did you use LCEL, LangGraph, or legacy chains?",
+    "How did you manage memory across multi-turn conversations in LangChain?",
+    "What prompted you to use LangChain over building the LLM pipeline directly with the API?",
+    "How did you handle LangChain's rate limiting and retry logic in production?",
+    "Did you use any LangChain agents or tools? How did you define tool schemas?"
+  ],
+  "llm": [
+    "What temperature and sampling parameters did you use and why?",
+    "How did you design your system prompt to reduce hallucination in the model's output?",
+    "Did you implement any output validation or self-correction loop on the LLM response?",
+    "How did you handle token budget management across long conversations?",
+    "What fine-tuning approach did you consider and why did you go with in-context learning instead?"
+  ],
+  "pytorch": [
+    "Walk me through how you set up your training loop \u2014 optimizer, loss function, and scheduler choices.",
+    "How did you handle class imbalance in your dataset?",
+    "What batch size did you use and how did you decide on it given your GPU memory constraints?",
+    "How did you monitor training \u2014 did you use TensorBoard, Weights & Biases, or something else?",
+    "How did you handle overfitting \u2014 dropout, weight decay, early stopping?"
+  ],
+  "tensorflow": [
+    "Did you use the Keras high-level API or build custom training loops with GradientTape?",
+    "How did you structure your data pipeline \u2014 tf.data, generators, or loaded in memory?",
+    "How did you export and serve your TensorFlow model for inference?"
+  ],
+  "machine_learning": [
+    "How did you split your dataset \u2014 train, validation, test \u2014 and why those proportions?",
+    "What evaluation metrics did you use and why were they the right choice for your problem?",
+    "How did you handle missing data or outliers in your dataset?",
+    "What was your feature engineering process and which features had the most predictive impact?",
+    "How did you tune hyperparameters \u2014 grid search, random search, or Bayesian optimization?"
+  ],
+  "nlp": [
+    "How did you preprocess and tokenize your text data before feeding it to the model?",
+    "Did you use pre-trained embeddings like Word2Vec, GloVe, or transformer-based embeddings?",
+    "How did you evaluate your NLP model \u2014 BLEU, ROUGE, F1, or task-specific metrics?",
+    "How did you handle out-of-vocabulary words or rare tokens in your vocabulary?"
+  ],
+  "sentiment_analysis": [
+    "What model architecture did you use for sentiment classification \u2014 LSTM, BERT, or a lighter model?",
+    "How did you handle negation and sarcasm in your sentiment pipeline?",
+    "What dataset did you train on and how did you handle the label imbalance between positive and negative examples?",
+    "What accuracy or F1 score did you achieve on the test set?"
+  ],
+  "deep_learning": [
+    "How did you choose the number of layers and hidden units in your architecture?",
+    "What activation functions did you use and why?",
+    "How did you deal with vanishing or exploding gradients during training?",
+    "What regularization techniques did you apply beyond dropout?"
+  ],
+  "cnn": [
+    "What CNN architecture did you use or design, and how many convolutional layers did you have?",
+    "How did you apply data augmentation to improve model generalization?",
+    "Did you use transfer learning from a pretrained backbone like ResNet or VGG?",
+    "How did you handle the tradeoff between model depth and inference speed?"
+  ],
+  "transformers": [
+    "Which transformer model did you use as a base and how did you fine-tune it for your task?",
+    "How did you handle the attention complexity for long sequences?",
+    "Did you use full fine-tuning or parameter-efficient methods like LoRA or adapters?",
+    "How did you manage tokenization and padding across variable-length inputs?"
+  ],
+  "huggingface": [
+    "Which HuggingFace model and tokenizer did you use, and why was it suitable for your task?",
+    "How did you use the Trainer API or did you write a custom training loop?",
+    "How did you handle model serialization and loading for deployment?"
+  ],
+  "generative_ai": [
+    "How did you design your prompt engineering strategy to get consistent outputs from the generative model?",
+    "How did you evaluate the quality of generated outputs?",
+    "How did you handle hallucination or factually incorrect outputs from the generative model?",
+    "Did you implement any guardrails or output filtering on the generated content?"
+  ],
+  "agentic_ai": [
+    "How did you design the agent's decision loop \u2014 ReAct, plan-and-execute, or another pattern?",
+    "How did you handle tool calling errors or unexpected tool outputs in the agent loop?",
+    "How did you prevent the agent from running into infinite loops or getting stuck?",
+    "How did you test and evaluate the agent's performance across different task types?"
+  ],
+  "react": [
+    "How did you manage state in your React application \u2014 Context API, Redux, or Zustand?",
+    "How did you optimize component re-renders to avoid performance bottlenecks?",
+    "How did you handle async data fetching \u2014 useEffect with cleanup, React Query, or SWR?",
+    "How did you structure your component hierarchy and when did you decide to split a component?"
+  ],
+  "nodejs": [
+    "How did you handle concurrent requests in your Node.js server?",
+    "How did you manage environment secrets and configuration across different environments?",
+    "What middleware did you use for authentication, validation, and error handling?"
+  ],
+  "mongodb": [
+    "How did you design your database schema \u2014 embedded documents or references, and why?",
+    "How did you index your collections for the queries your application runs most frequently?",
+    "How did you handle data migrations or schema changes on an existing MongoDB collection?"
+  ],
+  "api_design": [
+    "How did you design your REST API endpoints and what naming conventions did you follow?",
+    "How did you handle API versioning and backward compatibility?",
+    "How did you implement authentication \u2014 JWT, session cookies, or OAuth?",
+    "How did you document your API \u2014 Swagger, Postman collections, or OpenAPI spec?"
+  ],
+  "system_design": [
+    "If this system had to scale to 100x users, what would be the first component to bottleneck?",
+    "How would you introduce caching to reduce database load in this architecture?",
+    "How would you handle failure in a downstream service this system depends on?",
+    "What would a monitoring and alerting strategy look like for this system in production?"
+  ],
+  "general": [
+    "What was the hardest technical bug you encountered in this project and how did you track it down?",
+    "What would you redesign if you were starting this project from scratch today?",
+    "What performance optimization had the biggest impact on your system?",
+    "How did you approach testing \u2014 unit tests, integration tests, or end-to-end tests?"
+  ],
+  "oop": [
+    "What are the four pillars of Object-Oriented Programming and how do you apply them in real software?",
+    "How do you design an interface versus an abstract class in your codebase?",
+    "Can you explain a real-world scenario where you used runtime polymorphism to decouple modules?"
+  ],
+  "java": [
+    "How does the JVM garbage collector work, and what are generational garbage collection spaces?",
+    "Why is String immutable in Java, and what benefits does it offer for caching and security?",
+    "How do you handle thread-safe singleton initialization in Java?"
+  ],
+  "python": [
+    "How does memory management and garbage collection work in Python (reference counting and cyclic GC)?",
+    "How do Python decorators work under the hood and how do you write a decorator with arguments?",
+    "What is the difference between shallow copy and deep copy in Python objects?"
+  ],
+  "mysql": [
+    "How do indexes affect read versus write performance in MySQL tables?",
+    "How do you troubleshoot a slow-running SQL query and analyze its EXPLAIN execution plan?",
+    "What are the trade-offs between database normalization and denormalization?"
+  ],
+  "dsa": [
+    "How does quicksort or mergesort operate and when would you choose one over the other?",
+    "What data structure would you use to implement an autocomplete search feature and why?",
+    "How do you detect a cycle in a linked list in O(N) time and O(1) space?"
+  ]
+}

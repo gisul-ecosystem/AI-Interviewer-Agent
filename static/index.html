@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gisul AI — Live Voice Interview & Streaming STT</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="logo-group">
+        <div class="logo-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="22"/>
+            <line x1="8" y1="22" x2="16" y2="22"/>
+          </svg>
+        </div>
+        <div class="logo-text">
+          <h1>Gisul <span>AI Interviewer</span></h1>
+          <p class="subtitle" id="appSubtitle">Real-Time Whisper Large v3 Turbo STT & Qwen3-4B Brain</p>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <div class="role-selector-pill" id="roleSelectorPill">
+          <span class="role-icon">🎯</span>
+          <select id="roleSelect" class="role-select" title="Target Interview Role/Track">
+            <option value="auto">Role: Auto (CV ∩ job)</option>
+            <option value="aiml">AI / ML Engineer</option>
+            <option value="webd">Web Developer</option>
+            <option value="backend">Backend Engineer</option>
+            <option value="frontend">Frontend Engineer</option>
+            <option value="hr">HR / People Operations</option>
+          </select>
+        </div>
+        <div class="mode-switcher-pill" id="modeSwitcher">
+          <button class="mode-btn active" id="modeInterviewBtn" data-mode="interview" title="Resume-Aware AI Interview Mode">
+            Interview Mode
+          </button>
+          <button class="mode-btn" id="modeGeneralBtn" data-mode="general" title="Pure Raw Whisper STT Mode">
+            General STT
+          </button>
+        </div>
+        <div class="status-badge" id="statusBadge">
+          <span class="status-dot"></span>
+          <span class="status-text" id="statusText">Ready</span>
+        </div>
+        <button class="btn btn-secondary" id="pastInterviewsBtn" type="button">
+          Past interviews
+        </button>
+        <button class="btn btn-accent" id="quickUploadBtn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          Upload Resume
+        </button>
+        <button class="btn btn-secondary" id="openSettingsBtn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+          Prompt Settings
+        </button>
+      </div>
+    </header>
+
+    <!-- Active Candidate CV Profile Banner (Always Visible on Dashboard) -->
+    <div class="candidate-banner-card" id="dashCandidateBanner">
+      <div class="banner-header">
+        <div class="candidate-identity">
+          <div class="avatar-badge">👤</div>
+          <div>
+            <div class="candidate-name" id="dashName">Candidate: General Technical Candidate</div>
+            <div class="candidate-subtitle" id="dashSubtitle">CV Features & Technical Background</div>
+          </div>
+        </div>
+        <button class="btn btn-sm btn-outline-accent" id="dashUploadBtn">
+          📤 Upload / Change Resume
+        </button>
+      </div>
+      <div class="banner-features-grid">
+        <div class="banner-feat">
+          <span class="feat-label">🎓 College / University</span>
+          <strong id="dashCollege" class="feat-value">-</strong>
+        </div>
+        <div class="banner-feat">
+          <span class="feat-label">📜 Degree / Qualification</span>
+          <strong id="dashDegree" class="feat-value">-</strong>
+        </div>
+        <div class="banner-feat">
+          <span class="feat-label">💼 Stated Role / Position</span>
+          <strong id="dashRole" class="feat-value">-</strong>
+        </div>
+        <div class="banner-feat">
+          <span class="feat-label">🏢 Company / Employer</span>
+          <strong id="dashCompany" class="feat-value">-</strong>
+        </div>
+      </div>
+      <div class="banner-jd-row">
+        <label class="feat-label" for="jobDescriptionInput">Job description</label>
+        <textarea id="jobDescriptionInput" rows="4" placeholder="Paste the full job description here before you start the interview. Questions use JD skills ∩ CV skills."></textarea>
+        <p class="jd-hint">Paste the JD, pick a role track above, upload the resume, then start the mic.</p>
+      </div>
+      <div class="banner-skills-row">
+        <span class="feat-label">Projects from CV:</span>
+        <div class="dash-tags-container" id="dashProjects">
+          <span class="skill-tag">No projects yet</span>
+        </div>
+      </div>
+      <div class="banner-skills-row">
+        <span class="feat-label">Extracted CV Terms & Verified Skills:</span>
+        <div class="dash-tags-container" id="dashSkills">
+          <span class="skill-tag">Technical Terms</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Grid -->
+    <main class="main-content">
+      <!-- Left Panel: Live Audio & Speech-to-Text -->
+      <section class="card speech-card">
+        <div class="card-header">
+          <div class="card-title-group">
+            <span class="indicator-dot live-dot"></span>
+            <h2>Live Candidate Speech (Whisper STT)</h2>
+          </div>
+          <div class="metrics-pill">
+            <span id="speechTimer">15:00</span>
+            <span class="divider">|</span>
+            <span id="wordCount">0 words</span>
+          </div>
+        </div>
+
+        <!-- Audio Visualizer Canvas -->
+        <div class="visualizer-container">
+          <canvas id="waveformCanvas" width="600" height="90"></canvas>
+          <div class="visualizer-overlay" id="visualizerOverlay">
+            <p>Click "Start Speaking" to stream audio live</p>
+          </div>
+        </div>
+
+        <!-- Live Streaming Transcript Box -->
+        <div class="transcript-box" id="transcriptBox">
+          <div class="empty-state" id="emptyTranscript">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            </svg>
+            <p>Your spoken words will appear here in real-time as you speak...</p>
+          </div>
+          <p class="live-text" id="liveText"></p>
+        </div>
+
+        <!-- Final Transcript Result (appears after stopping) -->
+        <div class="final-transcript-box" id="finalTranscriptBox" style="display: none;">
+          <div class="final-transcript-header">
+            <div class="final-transcript-label">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+              <span>Final STT Transcript</span>
+            </div>
+            <div class="final-transcript-actions">
+              <span class="final-meta" id="finalMeta"></span>
+              <button class="btn-icon-small" id="copyTranscriptBtn" title="Copy to clipboard">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2"/>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <p class="final-transcript-text" id="finalTranscriptText"></p>
+        </div>
+
+        <!-- Audio Controls -->
+        <div class="controls-bar">
+          <button class="btn btn-primary btn-lg" id="toggleMicBtn">
+            <span class="btn-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                <line x1="12" y1="19" x2="12" y2="22"/>
+                <line x1="8" y1="22" x2="16" y2="22"/>
+              </svg>
+            </span>
+            <span id="micBtnText">Start Interview</span>
+          </button>
+
+          <!-- Lets candidates finish a turn immediately; silence remains a fallback. -->
+          <button class="btn btn-accent btn-lg" id="generateQuestionBtn" disabled>
+            <span class="btn-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+              </svg>
+            </span>
+            <span>I'm done speaking</span>
+          </button>
+
+          <button class="btn btn-ghost" id="clearBtn" title="Clear Text">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"/>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Keyboard Answer Section (Testing mode without mic) -->
+        <div class="keyboard-answer-section" style="margin-top: 16px; border-top: 1px dashed var(--border-color); padding-top: 14px;">
+          <label style="font-size: 0.85rem; font-weight: 600; color: #a855f7; display: flex; align-items: center; gap: 6px; margin-bottom: 8px;">
+            ⌨️ Or Type Candidate Answer (Keyboard Mode):
+          </label>
+          <div style="display: flex; gap: 8px; align-items: flex-start;">
+            <textarea id="textAnswerInput" class="form-control" rows="2" placeholder="Type your answer here (e.g. 'I built MoleCheck using PyTorch and Flask for melanoma classification...')" style="flex: 1; resize: vertical; font-size: 0.88rem; background: rgba(15, 23, 42, 0.6); color: #f8fafc; border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; padding: 8px 12px; font-family: inherit;"></textarea>
+            <button class="btn btn-accent" id="sendTextAnswerBtn" style="white-space: nowrap; height: 42px; display: inline-flex; align-items: center; gap: 6px; padding: 0 16px; background: linear-gradient(135deg, #a855f7, #6366f1); border: none; font-weight: 600;">
+              <span>Send Answer ➔</span>
+            </button>
+          </div>
+          <span style="font-size: 0.75rem; color: #94a3b8; margin-top: 4px; display: block;">Speak your full answer. The next question waits until you pause for a few seconds or tap “I'm done speaking”.</span>
+        </div>
+      </section>
+
+      <!-- Right Panel: AI Interviewer Follow-Up -->
+      <section class="card ai-card">
+        <div class="card-header">
+          <div class="card-title-group">
+            <span class="indicator-dot ai-dot"></span>
+            <h2>AI Interviewer Follow-Up (Qwen3-4B)</h2>
+          </div>
+          <div class="ai-controls">
+            <label class="toggle-control" title="Speak question aloud">
+              <input type="checkbox" id="voiceSynthesisToggle" checked>
+              <span class="toggle-track"></span>
+              <span class="toggle-label">Voice TTS</span>
+            </label>
+            <span class="toggle-hint" style="font-size:12px;opacity:0.75;margin-left:8px;">Use headphones so Kokoro is not recaptured by the mic</span>
+          </div>
+        </div>
+
+        <!-- AI Response Container -->
+        <div class="ai-response-box" id="aiResponseBox">
+          <div class="empty-state" id="emptyAiResponse">
+            <div class="ai-avatar">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <rect x="3" y="11" width="18" height="10" rx="2"/>
+                <circle cx="12" cy="5" r="2"/>
+                <path d="M12 7v4"/>
+                <line x1="8" y1="16" x2="8" y2="16"/>
+                <line x1="16" y1="16" x2="16" y2="16"/>
+              </svg>
+            </div>
+            <p>When you start the interview, the AI will greet you and ask for your introduction. Just speak — after a brief pause, the AI will automatically respond.</p>
+          </div>
+          <div class="ai-speech-bubble" id="aiBubble" style="display: none;">
+            <div class="bubble-header">
+              <span class="interviewer-tag">AI Interviewer</span>
+              <button class="btn-icon-small" id="replayVoiceBtn" title="Replay voice">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                </svg>
+              </button>
+            </div>
+            <p class="ai-text" id="aiText"></p>
+            <div class="typing-cursor" id="typingCursor"></div>
+          </div>
+        </div>
+
+        <!-- Conversation History Timeline -->
+        <div class="history-section">
+          <h3>Interview History</h3>
+          <div class="history-list" id="historyList">
+            <p class="no-history" id="noHistoryText">No turns completed yet</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Settings & Resume Upload Modal -->
+    <div class="modal-backdrop" id="settingsModal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Resume AI Feature Extraction & System Prompt</h3>
+          <button class="close-btn" id="closeSettingsBtn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <!-- Resume Upload Section -->
+          <div class="resume-section-container">
+            <label class="section-label">Upload Candidate Resume (PDF / TXT / MD):</label>
+            <div class="resume-dropzone" id="resumeDropzone">
+              <input type="file" id="resumeFileInput" accept=".pdf,.txt,.md" style="display: none;">
+              <div class="dropzone-content" id="dropzoneContent">
+                <div class="upload-icon">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                    <path d="M12 18v-6"/>
+                    <path d="M9 15l3-3 3 3"/>
+                  </svg>
+                </div>
+                <p class="upload-title">Drop resume file here or <span class="browse-link">browse files</span></p>
+                <p class="upload-hint">Qwen AI automatically extracts Candidate Name, Degree, Role & Skills</p>
+              </div>
+              <div class="upload-status" id="uploadStatus" style="display: none;">
+                <div class="spinner"></div>
+                <p id="uploadStatusText">Parsing resume & extracting features with Qwen AI...</p>
+              </div>
+            </div>
+
+            <!-- Extracted Features Summary -->
+            <div class="extracted-features-card" id="extractedFeaturesCard" style="display: none;">
+              <div class="features-header">
+                <span class="badge-success">✓ Extracted Features via Qwen AI</span>
+              </div>
+              <div class="features-grid">
+                <div class="feature-item">
+                  <span class="feature-label">Candidate Name</span>
+                  <span class="feature-val" id="featName">-</span>
+                </div>
+                <div class="feature-item">
+                  <span class="feature-label">Current Role</span>
+                  <span class="feature-val" id="featRole">-</span>
+                </div>
+                <div class="feature-item">
+                  <span class="feature-label">College / Institute</span>
+                  <span class="feature-val" id="featCollege">-</span>
+                </div>
+                <div class="feature-item">
+                  <span class="feature-label">Degree</span>
+                  <span class="feature-val" id="featDegree">-</span>
+                </div>
+                <div class="feature-item">
+                  <span class="feature-label">Current Company</span>
+                  <span class="feature-val" id="featCompany">-</span>
+                </div>
+              </div>
+              <div class="feature-tags-group">
+                <span class="feature-label">Projects from CV</span>
+                <div class="tags-container" id="featProjects"></div>
+              </div>
+              <div class="feature-tags-group">
+                <span class="feature-label">Core Tech & Skills</span>
+                <div class="tags-container" id="featSkills"></div>
+              </div>
+            </div>
+          </div>
+
+          <hr class="modal-divider">
+
+          <!-- System Prompt Section -->
+          <div class="prompt-section">
+            <label class="section-label" for="promptTextarea">Generated Interview System Prompt:</label>
+            <textarea id="promptTextarea" rows="9"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="cancelSettingsBtn">Cancel</button>
+          <button class="btn btn-primary" id="saveSettingsBtn">Save Prompt</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="scorecard-backdrop" id="scorecardModal" hidden>
+    <div class="scorecard-card" id="scorecardPrintRoot" role="dialog" aria-labelledby="scorecardTitle">
+      <div class="scorecard-header">
+        <div>
+          <p class="scorecard-kicker" id="scorecardKicker">Post-interview scorecard</p>
+          <h2 id="scorecardTitle">Interview complete</h2>
+          <p class="scorecard-sub" id="scorecardSub">Grading your answers…</p>
+        </div>
+        <button class="close-btn" id="closeScorecardBtn" type="button" aria-label="Close">&times;</button>
+      </div>
+      <div class="scorecard-body" id="scorecardBody"></div>
+      <div class="scorecard-actions no-print">
+        <button class="btn btn-secondary" id="downloadReportJsonBtn" type="button">Download JSON</button>
+        <button class="btn btn-secondary" id="printReportBtn" type="button">Print / PDF</button>
+        <button class="btn btn-primary" id="scorecardOpenHistoryBtn" type="button">View past interviews</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="history-drawer-backdrop" id="historyDrawerBackdrop" hidden></div>
+  <aside class="history-drawer" id="historyDrawer" hidden>
+    <div class="drawer-header">
+      <h2>Candidate interviews</h2>
+      <button class="close-btn" id="closeHistoryDrawerBtn" type="button" aria-label="Close">&times;</button>
+    </div>
+    <div class="drawer-filters">
+      <select id="historyRoleFilter" aria-label="Filter by role">
+        <option value="">All roles</option>
+        <option value="AI / ML Engineer">AI / ML</option>
+        <option value="Backend Engineer">Backend</option>
+        <option value="Web Developer">Web</option>
+        <option value="Frontend Engineer">Frontend</option>
+      </select>
+      <select id="historyRecFilter" aria-label="Filter by recommendation">
+        <option value="">All verdicts</option>
+        <option value="strong_hire">Strong hire</option>
+        <option value="hire">Hire</option>
+        <option value="borderline">Borderline</option>
+        <option value="no_hire">No hire</option>
+      </select>
+    </div>
+    <div class="drawer-list" id="historyInterviewList"></div>
+    <div class="drawer-detail" id="historyInterviewDetail"></div>
+  </aside>
+
+  <div class="agenda-overlay" id="agendaOverlay" hidden>
+    <div class="agenda-card" role="dialog" aria-labelledby="agendaTitle">
+      <p class="agenda-kicker">Confirm interview agenda</p>
+      <h2 id="agendaTitle">We will interview you on this work</h2>
+      <p class="agenda-lead" id="agendaLead">Review the projects and skills before the microphone opens.</p>
+      <div class="agenda-block">
+        <span class="agenda-label">Projects</span>
+        <div class="agenda-tags" id="agendaProjects"></div>
+      </div>
+      <div class="agenda-block">
+        <span class="agenda-label">Fundamentals & skills</span>
+        <div class="agenda-tags" id="agendaSkills"></div>
+      </div>
+      <p class="agenda-meta" id="agendaMeta"></p>
+      <div class="agenda-actions">
+        <button class="btn btn-secondary" id="agendaEditBtn" type="button">Edit resume / JD</button>
+        <button class="btn btn-primary" id="agendaConfirmBtn" type="button">Yes, this is correct</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

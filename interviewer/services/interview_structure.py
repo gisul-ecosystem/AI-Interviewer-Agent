@@ -1,0 +1,71 @@
+"""
+15-minute interview structure.
+
+  Opening        1 spoken turn   intro + first project question
+  Projects       2 questions each, up to 2 CV projects
+  Fundamentals   OOPs + DSA — 3 questions each, locked at resume upload
+  Skills         3 questions each, locked at resume upload from bank + CV terms
+  Closing        1 wrap-up turn
+"""
+
+from __future__ import annotations
+
+from typing import Any, Mapping
+
+from interviewer.config import settings
+
+DURATION_SECONDS = settings.interview.duration_seconds
+WRAP_UP_SECONDS = settings.interview.wrap_up_seconds
+QUESTIONS_PER_PROJECT = settings.interview.project_questions
+QUESTIONS_PER_SKILL = settings.interview.skill_questions
+MAX_PROJECTS = settings.interview.max_projects
+MAX_SKILLS = settings.interview.max_skills
+
+
+def planned_question_count(project_count: int, skill_count: int) -> int:
+    """Opening is counted inside the first project's quota. Plus one closing turn."""
+    projects = max(1, min(MAX_PROJECTS, project_count)) if project_count else 1
+    skills = max(0, min(MAX_SKILLS + 2, skill_count))
+    per_skill = max(3, QUESTIONS_PER_SKILL)
+    return projects * QUESTIONS_PER_PROJECT + skills * per_skill + 1
+
+
+def opening_greeting(
+    name: str,
+    role_label: str,
+    duration_seconds: int,
+    projects: list[str] | None,
+    skills: list[str] | None,
+) -> str:
+    mins = max(1, int(round((duration_seconds or DURATION_SECONDS) / 60)))
+    who = name if name and name.lower() not in ("", "null", "the candidate") else "there"
+    proj = ", ".join((projects or [])[:2]) or "your resume projects"
+    foundation = {
+        "object-oriented programming",
+        "data structures and algorithms",
+        "oop",
+        "oops",
+        "dsa",
+        "data structures",
+        "algorithms",
+    }
+    cv_skills = [
+        s for s in (skills or [])
+        if str(s).strip().lower() not in foundation and "object-oriented" not in str(s).lower()
+    ]
+    skill = ", ".join(cv_skills[:2]) or "the skills on your resume"
+    return (
+        f"Hi {who}, I'm your interviewer for this {mins}-minute {role_label} conversation. "
+        f"We'll start with a short introduction, then go deep on {proj}, "
+        f"cover OOPs and DSA, and finish with {skill}. Please introduce yourself and the work you're proudest of."
+    )
+
+
+def quotas_from_plan(plan: Mapping[str, Any] | None) -> dict[str, int]:
+    plan = plan or {}
+    return {
+        "questions_per_project": int(plan.get("questions_per_project") or QUESTIONS_PER_PROJECT),
+        "questions_per_skill": int(plan.get("questions_per_skill") or QUESTIONS_PER_SKILL),
+        "duration_seconds": int(plan.get("duration_seconds") or DURATION_SECONDS),
+        "wrap_up_seconds": int(plan.get("wrap_up_seconds") or WRAP_UP_SECONDS),
+    }

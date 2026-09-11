@@ -1,0 +1,19 @@
+# Web application
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+python-multipart>=0.0.9,<1
+websockets>=12,<18
+pypdf>=4,<7
+
+# Pooled async HTTP for the LLM / TTS adapters. Connection reuse is a
+# latency requirement on the live path, not a convenience.
+httpx>=0.27,<1
+
+# Hot session cache. The app falls back to an in-process dict if unreachable.
+redis>=5.0.0
+
+# STT: Groq whisper-large-v3-turbo by default (STT_API_KEY / GROQ_API_KEY).
+# Local fallback: STT_PROVIDER=whisper
+faster-whisper>=1.1
+numpy>=1.26
+requests>=2.31
