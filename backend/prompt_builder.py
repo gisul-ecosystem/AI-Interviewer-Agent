@@ -78,6 +78,7 @@ def build_interviewer_prompt(
     per_proj = max(1, int(plan.get("questions_per_project") or 4))
     project_names = [str(p) for p in (plan.get("project_names") or projects)[:2] if p]
     proj_line = " then ".join(project_names) if project_names else "the resume projects"
+    project_contexts = candidate_dict.get("project_contexts") or {}
 
     stage = fsm_state.get("stage", "project_deep_dive")
     skill_phase = (
@@ -137,6 +138,9 @@ def build_interviewer_prompt(
         mentioned = ", ".join(spec.get("mentioned_terms") or []) or "none extracted"
         fallback = spec.get("spoken_fallback") or spoken_seed or seed_q or ""
         project = spec.get("project_name") or ""
+        project_resume_context = str(project_contexts.get(project) or "")
+        if not project_resume_context:
+            project_resume_context = "\n".join(str(chunk) for chunk in resume_chunks[:2])
         stay_on = f"Stay on '{project}' and say that name.\n" if project else f"Stay on {target_topic}.\n"
         prev_probe = spec.get("previous_probe") or ""
         prev_anchor = spec.get("previous_anchor") or ""
@@ -165,6 +169,8 @@ def build_interviewer_prompt(
         mode_instruction = (
             "MODE: GENERATE — WRITE THE NEXT INTERVIEW QUESTION FROM THEIR LAST ANSWER\n"
             "You are live. The candidate just answered. Your only job is to follow that answer.\n"
+            f"CV CONTEXT FOR THIS PROJECT (facts only; never turn another title into this project):\n"
+            f"\"\"\"{project_resume_context[:1200] or '(no additional CV context)'}\"\"\"\n"
             f"THEIR LAST ANSWER (follow this):\n\"\"\"{last_full or '(thin or empty — use the fallback)'}\"\"\"\n"
             "Do this:\n"
             "1. Pick ONE concrete claim they made (a tool, model, step, data problem, or number).\n"
@@ -273,6 +279,10 @@ POLICY: {decision_directive}
             "college": candidate_dict.get("college"),
             "degree": candidate_dict.get("degree"),
             "projects": projects,
+            "project_context": (
+                str(project_contexts.get(spec.get("project_name") or "") or "")
+                or "\n".join(str(chunk) for chunk in resume_chunks[:2])
+            )[:1200],
             "interview_skills": skills[:10],
             "cv_skills": candidate_dict.get("cv_skills", [])[:10],
             "skill_intersection": sift.get("intersection", []),

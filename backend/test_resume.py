@@ -206,6 +206,90 @@ Data Structures and Algorithms
     print("[ok] skills stayed out of projects", parsed["projects"], parsed["skills"][:6])
 
 
+def test_numbered_and_sentence_case_web_projects():
+    parsed = ingest_resume(
+        """
+Riya Sharma
+SKILLS
+HTML, CSS, JavaScript, SQL
+
+PROJECTS
+1. Campus portal
+2. E-commerce website using React
+3. Chat Application | Node.js, Socket.io
+"""
+    )
+    lowered = [p.lower() for p in parsed["projects"]]
+    assert any("campus" in p and "portal" in p for p in lowered), parsed["projects"]
+    assert any("commerce" in p or "e-commerce" in p for p in lowered), parsed["projects"]
+    assert any("chat" in p for p in lowered), parsed["projects"]
+    print("[ok] numbered web projects", parsed["projects"])
+
+
+def test_title_label_and_academic_project_header():
+    parsed = ingest_resume(
+        """
+Karan Mehta
+ACADEMIC PROJECT
+Title: Online Voting System
+Developed a secure voting portal with JWT auth.
+Title: IoT Based Smart Irrigation
+"""
+    )
+    blob = " ".join(parsed["projects"]).lower()
+    assert "voting" in blob, parsed["projects"]
+    assert "irrigation" in blob or "iot" in blob, parsed["projects"]
+    assert "title" not in blob
+    print("[ok] labeled academic projects", parsed["projects"])
+
+
+def test_two_column_skills_projects_header():
+    parsed = ingest_resume(
+        """
+Aditya Bargujar
+SKILLS          PROJECTS
+Python          MoleCheck – Mole Identification System
+TensorFlow      Mental Health Predictor Live Demo
+"""
+    )
+    titles = [p.lower() for p in parsed["projects"]]
+    assert "molecheck" in titles, parsed["projects"]
+    assert any("mental health" in p for p in titles), parsed["projects"]
+    print("[ok] two-column header", parsed["projects"])
+
+
+def test_live_demo_is_not_a_project():
+    parsed = ingest_resume(
+        """
+PROJECTS
+Mental Health Predictor Live Demo
+Live Demo
+MoleCheck - CNN classifier
+"""
+    )
+    lowered = [p.lower() for p in parsed["projects"]]
+    assert "live demo" not in lowered
+    assert "molecheck" in lowered
+    assert any("mental health" in p for p in lowered)
+    print("[ok] live demo stripped", parsed["projects"])
+
+
+def test_llm_hallucinated_titles_are_dropped():
+    parsed = ingest_resume(
+        """
+Aditya Bargujar
+SKILLS
+Python, TensorFlow
+PROJECTS
+MoleCheck - A CNN image classifier.
+""",
+        llm_fields={"projects": ["MadeUpApp", "TensorFlow", "MoleCheck"]},
+    )
+    assert parsed["projects"] == ["MoleCheck"], parsed["projects"]
+    assert parsed["project_contexts"]["MoleCheck"]
+    print("[ok] hallucinated titles dropped", parsed["projects"])
+
+
 if __name__ == "__main__":
     test_multiline_projects_and_skills()
     test_long_description_becomes_title()
@@ -217,4 +301,9 @@ if __name__ == "__main__":
     test_resume_txt_does_not_treat_bullets_as_titles()
     test_skills_are_not_copied_into_projects()
     test_full_candidate_resume_extraction()
+    test_numbered_and_sentence_case_web_projects()
+    test_title_label_and_academic_project_header()
+    test_two_column_skills_projects_header()
+    test_live_demo_is_not_a_project()
+    test_llm_hallucinated_titles_are_dropped()
     print("[SUCCESS] Resume extraction checks passed.")

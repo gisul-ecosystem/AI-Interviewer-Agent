@@ -362,6 +362,31 @@ def test_project_thread_climbs_one_ladder():
     assert "last answer" in sys_msg.lower()
     assert "follow this" in sys_msg.lower() or "follow that answer" in sys_msg.lower()
     assert "dictionary definition" in sys_msg.lower()
+    prompt = build_interviewer_prompt(
+        fsm_state={"stage": "project_deep_dive", "questions_already_asked": spoken},
+        candidate_dict={
+            **cv,
+            "project_contexts": {
+                "MoleCheck": "MoleCheck used MobileNetV2 and class-weight balancing on ISIC 2019."
+            },
+        },
+        candidate_answer=answers[-1],
+        question_decision=QuestionDecision(
+            mode="GENERATE",
+            seed_question=last["spoken_fallback"],
+            seed_topic="Project: MoleCheck",
+            similarity_score=0.0,
+            target_topic="Project: MoleCheck",
+            target_difficulty=2,
+            directive="Stay on MoleCheck.",
+            probes=[],
+            spoken_question=last["spoken_fallback"],
+            followup_spec=last,
+        ),
+    )
+    sys_msg = prompt["messages"][0]["content"]
+    assert "CV CONTEXT FOR THIS PROJECT" in sys_msg
+    assert "MobileNetV2" in sys_msg
     print("[SUCCESS] Project follow-ups climb one ladder and reference the last turn.")
 
 

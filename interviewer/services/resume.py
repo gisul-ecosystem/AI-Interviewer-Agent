@@ -92,7 +92,8 @@ SECTION_ALIASES: dict[str, tuple[str, ...]] = {
     "projects": (
         "technical projects", "academic projects", "personal projects",
         "key projects", "selected projects", "major projects", "project work",
-        "projects",
+        "relevant projects", "course projects", "academic project",
+        "personal project", "major project", "projects",
     ),
     "experience": (
         "professional experience", "work experience", "work history",
@@ -136,9 +137,24 @@ _GLUED_SECTION_RE = re.compile(
     r"PROJECTS|SKILLS|CERTIFICATIONS|ACHIEVEMENTS)\b",
     re.IGNORECASE,
 )
+# Only split when the section keyword is in ALL-CAPS (a glued PDF header),
+# not when it appears in lowercase prose (e.g. "practical skills in...").
 _MIDLINE_SECTION_RE = re.compile(
-    r"(?<=\S)[ \t]*(?=(?:EDUCATION|ACADEMICS|EXPERIENCE|INTERNSHIPS|"
+    r"(?<=[A-Z0-9.!?|/])[ \t/|]*(?=(?:EDUCATION|ACADEMICS|EXPERIENCE|INTERNSHIPS|"
     r"PROJECTS|SKILLS|CERTIFICATIONS|ACHIEVEMENTS)\b)",
+    # No re.IGNORECASE — we intentionally only match uppercase keywords here.
+)
+_MIDLINE_PHRASE_RE = re.compile(
+    r"(?<=\S)[ \t/|]*(?=(?:Technical\s+Skills|Core\s+Skills|Academic\s+Projects|"
+    r"Personal\s+Projects|Key\s+Projects|Selected\s+Projects|Relevant\s+Projects|"
+    r"Work\s+Experience|Professional\s+Experience|Project\s+Work)\b)",
+    re.IGNORECASE,
+)
+_TWO_HEADER_RE = re.compile(
+    r"\b(?P<a>EDUCATION|ACADEMICS|EXPERIENCE|INTERNSHIPS|PROJECTS|SKILLS|"
+    r"CERTIFICATIONS|ACHIEVEMENTS)\b[ \t]*[/|&]+[ \t]*"
+    r"\b(?P<b>EDUCATION|ACADEMICS|EXPERIENCE|INTERNSHIPS|PROJECTS|SKILLS|"
+    r"CERTIFICATIONS|ACHIEVEMENTS)\b",
     re.IGNORECASE,
 )
 
@@ -190,13 +206,52 @@ _RESUME_VERBS = frozenset({
     "deployed", "integrated", "optimized", "tested",
 })
 
+_TITLE_SMALLWORDS = frozenset({
+    "a", "an", "the", "of", "and", "for", "in", "or", "with", "on", "to", "by",
+    "from", "using", "vs", "vs.",
+})
+_TITLE_NOUNS = frozenset({
+    "system", "app", "application", "website", "portal", "platform", "dashboard",
+    "detector", "classifier", "predictor", "tracker", "manager", "management",
+    "chatbot", "chat", "assistant", "tool", "service", "network", "identification",
+    "monitoring", "detection", "recognition", "automation", "store", "shop",
+    "commerce", "ecommerce", "voting", "attendance", "inventory", "booking",
+    "scheduler", "recommendation", "engine", "hackathon", "analyzer", "finder",
+    "generator", "monitor", "planner", "reminder", "blog", "forum", "game",
+    "clone", "board", "tracker", "extension", "plugin", "api", "bot",
+})
+_BARE_DEMO_TITLES = frozenset({
+    "live demo", "demo", "github", "source code", "website", "link", "code",
+})
+_PROJECT_NUM_RE = re.compile(
+    r"^(?:[\-\*\u2022]\s*)?(?:(?:project|proj)\s*)?(?:\(?\d{1,2}\)?[.):\-]|\(?[A-Z]\)[.):\-]?)\s+",
+    re.IGNORECASE,
+)
+_PROJECT_LABEL_RE = re.compile(
+    r"^(?:title|name|project(?:\s*(?:name|title))?)\s*:\s*",
+    re.IGNORECASE,
+)
+
 _PROJECT_FRAGMENTS = frozenset({
     "dataset", "specificity", "sensitivity", "precision", "recall", "accuracy",
     "negatives", "correlation", "curves", "pipeline", "augmentation",
     "malignant", "benign", "distribution", "classification", "model",
     "matrix", "confusion", "analysis", "evaluation", "results", "metrics",
-    "roc", "auc", "f1", "score", "threshold", "layer", "features", "parameters",
+    "roc", "auc", "f1", "f2", "f1-score", "f2-score", "score", "threshold",
+    "layer", "features", "parameters", "bleu", "rouge", "perplexity", "map",
+    "top-1", "top-5", "mse", "mae", "rmse", "loss",
 })
+
+# Titles starting with a descriptor adjective are descriptions, not project names.
+# e.g. "AI-generated Text", "Human-generated Text Classification", "Fine-tuned BERT"
+_DESCRIPTOR_ADJ_RE = re.compile(
+    r"^(?:AI|Human|Machine|Auto|Pre|Fine|Custom|Auto)[- ]"
+    r"(?:generated|tuned|trained|built|made|designed|labelled|labeled)\b",
+    re.IGNORECASE,
+)
+
+# Metric identifiers like "F1-score", "F1", "Top-1" that start with F/T + digit
+_METRIC_ID_RE = re.compile(r"^[A-Za-z]{1,3}\d[-_]", re.IGNORECASE)
 
 _PROJECT_SUFFIX_RE = re.compile(
     r"(?i)\s+(live\s+demo|demo|github|website|app)$"
@@ -241,7 +296,9 @@ def _repair_resume_layout(text: str) -> str:
     """Undo PDF column glue so SKILLS and PROJECTS stay separate sections."""
     if not text:
         return ""
-    repaired = _unglue_section_headers(text)
+    repaired = _TWO_HEADER_RE.sub(lambda m: m.group("a") + "\n" + m.group("b"), text)
+    repaired = _unglue_section_headers(repaired)
+    repaired = _MIDLINE_PHRASE_RE.sub("\n", repaired)
     repaired = _MIDLINE_SECTION_RE.sub("\n", repaired)
     repaired = re.sub(r"[ \t]*[•\u2022]\s*", "\n• ", repaired)
     return repaired
@@ -260,6 +317,16 @@ def _section_kind(header: str) -> str | None:
     return None
 
 
+
+# Words that indicate the matched "section header" is actually a prose continuation,
+# e.g. "experience in Machine Learning" or "projects including Deepfake...".
+_PROSE_CONTINUATION_RE = re.compile(
+    r"^(?:in\b|including\b|of\b|with\b|for\b|on\b|at\b|by\b|to\b|from\b|and\b|"
+    r"as\b|are\b|is\b|was\b|were\b|that\b|which\b|such\b|like\b)",
+    re.IGNORECASE,
+)
+
+
 def _collect_sections(text: str) -> dict[str, list[str]]:
     """Split a resume into named sections. Unlabelled leading lines go to 'preamble'."""
     sections: dict[str, list[str]] = {kind: [] for kind in SECTION_ALIASES}
@@ -271,6 +338,12 @@ def _collect_sections(text: str) -> dict[str, list[str]]:
             kind = _section_kind(match.group("header"))
             rest = (match.group("rest") or "").strip()
             if kind:
+                # Guard: if rest looks like prose continuation ("experience in ML",
+                # "projects including Foo"), this is not a real section header —
+                # it's a prose line where the section keyword appears at the start.
+                if rest and _PROSE_CONTINUATION_RE.match(rest):
+                    sections.setdefault(current, []).append(line)
+                    continue
                 current = kind
                 if rest:
                     sections[kind].append(rest)
@@ -283,6 +356,7 @@ def _collect_sections(text: str) -> dict[str, list[str]]:
             continue
         sections.setdefault(current, []).append(line)
     return sections
+
 
 
 JOB_LINE_RE = re.compile(
@@ -328,6 +402,14 @@ def _is_skillish_title(text: str) -> bool:
     if _looks_like_skill_csv(cleaned):
         return True
     if re.match(r"(?i)^(programming|libraries|frameworks|tools|core|languages|ai/?ml)\b", cleaned):
+        return True
+    # ML/AI class names and sklearn pipeline components are skills, not projects.
+    if re.match(
+        r"(?i)^(ColumnTransformer|StandardScaler|MinMaxScaler|LabelEncoder|OneHotEncoder|"
+        r"Pipeline|GridSearchCV|RandomizedSearchCV|LogisticRegression|DecisionTree|"
+        r"RandomForest|GradientBoosting|XGBoost|LightGBM|CatBoost|SVM|KNN|KMeans)$",
+        cleaned,
+    ):
         return True
     if any(
         phrase in low
@@ -446,6 +528,14 @@ def _tech_vocab_lower() -> set[str]:
     return {t.lower() for t in TECH_VOCAB}
 
 
+def _strip_project_prefix(text: str) -> str:
+    """Drop '1.', 'Project 2:', 'Title:' so the actual name can be parsed."""
+    cleaned = re.sub(r"\s+", " ", str(text or "")).strip(" -–—|:•*")
+    cleaned = _PROJECT_NUM_RE.sub("", cleaned).strip(" -–—|:•*")
+    cleaned = _PROJECT_LABEL_RE.sub("", cleaned).strip(" -–—|:•*")
+    return cleaned
+
+
 def _looks_like_project_fragment(text: str) -> bool:
     tokens = re.findall(r"[a-z]+", str(text or "").lower())
     if not tokens:
@@ -459,44 +549,92 @@ def _looks_like_project_fragment(text: str) -> bool:
     return False
 
 
-def _is_project_name(text: str) -> bool:
-    """True only for a short product/project title, never a bullet description."""
-    cleaned = _PROJECT_SUFFIX_RE.sub("", re.sub(r"\s+", " ", str(text or "")).strip(" -–—|:•*.,"))
+def _is_name_like_token(token: str, *, first: bool, loose: bool) -> bool:
+    raw = str(token or "")
+    stripped = re.sub(r"[^A-Za-z0-9+#]", "", raw)
+    if not stripped:
+        return False
+    low = stripped.lower()
+    if low in _TITLE_SMALLWORDS:
+        return not first
+    if low in _RESUME_VERBS:
+        return False
+    if first and low in _PROJECT_FRAGMENTS:
+        return False
+    if stripped[0].isdigit():
+        return True
+    if stripped[0].isupper():
+        return True
+    if re.search(r"[a-z][A-Z]", stripped):
+        return True
+    if low in {"iot", "ai", "ml", "nlp", "cv", "ios", "ar", "vr"}:
+        return True
+    if "commerc" in low or low in {"ecommerce", "nextjs", "nodejs"}:
+        return True
+    if not first and (low in _TITLE_NOUNS or (loose and stripped.isalpha() and 2 <= len(stripped) <= 18)):
+        return True
+    if first and loose and stripped.isalpha() and 3 <= len(stripped) <= 24 and low not in _PROJECT_FRAGMENTS:
+        return True
+    return False
+
+
+def _is_project_name(text: str, *, loose: bool = False) -> bool:
+    """True for a short product/project title, never a bullet description."""
+    cleaned = _PROJECT_SUFFIX_RE.sub("", _strip_project_prefix(text)).strip(" -–—|:•*.,")
     if not cleaned or PROJECT_DESC_RE.match(cleaned) or _looks_like_project_fragment(cleaned):
+        return False
+    if cleaned.lower() in _BARE_DEMO_TITLES or cleaned.lower() in GENERIC_PROJECT_TITLES:
         return False
     if _is_skillish_title(cleaned):
         return False
     if cleaned.lower() in _tech_vocab_lower():
         return False
-    words = cleaned.split()
-    if not 1 <= len(words) <= 6:
+    # Fix 5: Reject adjective-phrase titles like "AI-generated Text Classification"
+    if _DESCRIPTOR_ADJ_RE.match(cleaned):
         return False
-    filler = {"of", "and", "for", "the", "in", "or", "with", "using", "by", "from"}
-    if words[0].lower() in filler:
+    # Fix 6: Reject metric identifiers like "F1-score", "F2-score"
+    if _METRIC_ID_RE.match(cleaned):
+        return False
+    # Reject pure all-caps abbreviations that are skills, not project names
+    # e.g. "ML", "AI", "NLP", "DSA" are skills; real project names have more context.
+    if re.match(r'^[A-Z]{1,4}$', cleaned):
+        return False
+    # Reject names that are hyphenated compound terms ending in a word class
+    # like "Question-Answering" (a task type, not a product name) unless followed by
+    # a product noun like "system", "app" etc.
+    if cleaned.endswith(".") or cleaned.endswith(","):
+        cleaned = cleaned.rstrip(".,")
+        if not cleaned:
+            return False
+    words = cleaned.split()
+    if not 1 <= len(words) <= 8:
         return False
     named = 0
-    for word in words:
-        token = re.sub(r"[^A-Za-z0-9+#]", "", word)
-        if not token:
+    for i, word in enumerate(words):
+        if not _is_name_like_token(word, first=(i == 0), loose=loose):
             return False
-        if token.lower() in filler:
-            continue
-        if token.lower() in _RESUME_VERBS or token.lower() in _PROJECT_FRAGMENTS:
-            return False
-        if not re.match(r"^[A-Z][A-Za-z0-9+#]*$", token):
-            return False
-        named += 1
-    return named >= 1
+        low = re.sub(r"[^a-z0-9+#]+", "", word.lower())
+        if low not in _TITLE_SMALLWORDS:
+            named += 1
+    if named < 1:
+        return False
+    # Long prose-like lines are descriptions, even when every word is capitalised
+    # by a PDF template. Explicit numbered/labelled titles use loose=True.
+    if not loose and named >= 5 and not any(
+        word.lower() in _TITLE_NOUNS for word in words
+    ):
+        return False
+    return True
 
 
-def project_title(raw: str) -> str | None:
+def project_title(raw: str, *, loose: bool = True) -> str | None:
     """
     Turn a project bullet into a speakable title.
 
     'Ferrite Mesh - A service mesh sidecar...' -> 'Ferrite Mesh'
     Description-only bullets are dropped, not truncated into fake titles.
     """
-    text = re.sub(r"\s+", " ", str(raw or "")).strip(" -–—|:•*")
+    text = _strip_project_prefix(raw)
     if not text:
         return None
     lowered = text.lower()
@@ -504,25 +642,43 @@ def project_title(raw: str) -> str | None:
         return None
     if PROJECT_DESC_RE.match(text):
         return None
+    if lowered in _BARE_DEMO_TITLES:
+        return None
 
     match = PROJECT_TITLE_RE.match(text)
     if match:
         title = re.sub(r"\s+", " ", match.group("title")).strip()
-        title = _PROJECT_SUFFIX_RE.sub("", title).strip()
-        if _is_project_name(title):
+        title = _PROJECT_SUFFIX_RE.sub("", title).strip().rstrip(".,:;")
+        title = _strip_project_prefix(title)
+        if _is_project_name(title, loose=loose):
             return title
 
-    candidate = _PROJECT_SUFFIX_RE.sub("", text).strip()
-    if _is_project_name(candidate):
+    candidate = _PROJECT_SUFFIX_RE.sub("", text).strip().rstrip(".,:;")
+    candidate = _strip_project_prefix(candidate)
+    if _is_project_name(candidate, loose=loose):
         return candidate
     return None
 
 
 def _project_chunks(line: str) -> list[str]:
     """Split a PROJECTS line that glued titles and description bullets together."""
-    text = re.sub(r"\s+", " ", str(line or "")).strip()
-    if not text:
+    raw = str(line or "").strip()
+    if not raw:
         return []
+    spaced = [part.strip() for part in re.split(r"[ \t]{2,}", raw) if part.strip()]
+    if len(spaced) >= 2:
+        return spaced
+    text = re.sub(r"\s+", " ", raw).strip()
+    numbered = [
+        part.strip(" -–—|:•*")
+        for part in re.split(r"(?:(?<=\S)\s+)?(?=\d{1,2}[.)]\s+)", text)
+        if part.strip(" -–—|:•*")
+    ]
+    if len(numbered) >= 2:
+        return numbered
+    spaced = [part.strip() for part in re.split(r"\s{2,}", text) if part.strip()]
+    if len(spaced) >= 2:
+        return spaced
     # If the line starts with a bullet point or action verb, it is a project description bullet, NOT glued project titles!
     if re.match(r"^[\s\-*•\u2022]\s*", line) or PROJECT_DESC_RE.match(text) or _looks_like_project_fragment(text):
         # A line starting with a bullet could still be: • Ferrite Mesh - A service mesh...
@@ -544,27 +700,46 @@ def _project_chunks(line: str) -> list[str]:
         return expanded
     if re.search(r"\s[-–—|:]\s+", text):
         return [text]
-    if "," in text and len(text) > 40:
+    if "," in text:
         parts = [part.strip() for part in text.split(",") if part.strip()]
         kept: list[str] = []
         for part in parts:
             if PROJECT_DESC_RE.match(part) or _looks_like_project_fragment(part) or len(part.split()) > 8:
                 continue
             kept.append(part)
-        return kept
+        if len(kept) >= 2 or (kept and len(text) > 40):
+            return kept
     return [text]
 
 
 def extract_projects(text: str, stated: Iterable[Any] | None = None) -> list[str]:
-    """Project titles from structured fields plus the PROJECTS / EXPERIENCE sections."""
+    """Project titles from LLM candidates and the PROJECTS section.
+
+    LLM candidates are accepted only when their words occur in the source CV.
+    Descriptions are never promoted merely because they are inside PROJECTS.
+    """
     found: list[str] = []
     seen: set[str] = set()
+    source_fold = re.sub(r"[^a-z0-9+#]+", " ", text.lower())
+    source_tokens = set(source_fold.split())
 
-    def add(raw: Any) -> None:
-        title = project_title(str(raw)) if raw else None
+    def has_source_evidence(title: str) -> bool:
+        title_fold = re.sub(r"[^a-z0-9+#]+", " ", title.lower()).strip()
+        if title_fold and title_fold in source_fold:
+            return True
+        tokens = [
+            token for token in title_fold.split()
+            if token not in _TITLE_SMALLWORDS and len(token) >= 2
+        ]
+        return bool(tokens) and all(token in source_tokens for token in tokens)
+
+    def add(raw: Any, *, loose: bool = False, require_evidence: bool = False) -> None:
+        title = project_title(str(raw), loose=loose) if raw else None
         if not title or is_resume_metadata_title(title) or looks_like_job_line(title) or looks_like_job_line(str(raw)):
             return
-        if _is_skillish_title(title) or PROJECT_DESC_RE.match(title) or not _is_project_name(title):
+        if require_evidence and not has_source_evidence(title):
+            return
+        if _is_skillish_title(title) or PROJECT_DESC_RE.match(title) or not _is_project_name(title, loose=loose):
             return
         key = title.lower()
         if key in seen:
@@ -575,7 +750,36 @@ def extract_projects(text: str, stated: Iterable[Any] | None = None) -> list[str
     if isinstance(stated, str):
         stated = [part.strip() for part in stated.split(",") if part.strip()]
     for item in stated or ():
-        add(item)
+        # LLM-stated projects get trusted if:
+        # 1. The words appear in the source CV (evidence check)
+        # 2. It's not a skill/tool name
+        # 3. It doesn't look like a section heading or job line
+        # We skip the strict _is_project_name() heuristic — the LLM already parsed the structure.
+        raw = str(item or "").strip()
+        if not raw:
+            continue
+        raw_clean = _strip_project_prefix(raw).strip(" -\u2013\u2014|:\u2022*.,")
+        raw_clean = _PROJECT_SUFFIX_RE.sub("", raw_clean).strip().rstrip(".,:;")
+        if not raw_clean or len(raw_clean) < 2:
+            continue
+        if is_resume_metadata_title(raw_clean) or looks_like_job_line(raw_clean):
+            continue
+        if _is_skillish_title(raw_clean) or raw_clean.lower() in _tech_vocab_lower():
+            continue
+        if PROJECT_DESC_RE.match(raw_clean):
+            continue
+        if _DESCRIPTOR_ADJ_RE.match(raw_clean) or _METRIC_ID_RE.match(raw_clean):
+            continue
+        if re.match(r'^[A-Z]{1,4}$', raw_clean):  # pure abbreviation (ML, AI)
+            continue
+        # Require that the title's key words exist in the resume text.
+        if not has_source_evidence(raw_clean):
+            continue
+        key = raw_clean.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        found.append(raw_clean)
 
     sections = _collect_sections(text)
     for line in sections.get("projects") or ():
@@ -584,14 +788,55 @@ def extract_projects(text: str, stated: Iterable[Any] | None = None) -> list[str
         for chunk in _project_chunks(line):
             if PROJECT_DESC_RE.match(chunk) or _looks_like_skill_csv(chunk):
                 continue
-            add(chunk)
+            explicit = bool(_PROJECT_NUM_RE.match(chunk) or _PROJECT_LABEL_RE.match(chunk))
+            add(chunk, loose=explicit)
+    # Fix 4: Fallback only within PROJECTS section (numbered/labelled lines that
+    # _project_chunks may have missed), NOT the whole resume — prevents summary
+    # and experience lines from being promoted into project titles.
+    if len(found) < 2:
+        for line in sections.get("projects") or []:
+            if looks_like_job_line(line) or _looks_like_skill_csv(line):
+                continue
+            if _PROJECT_NUM_RE.match(line) or _PROJECT_LABEL_RE.match(line):
+                add(line, loose=True)
     if not found:
         for line in sections.get("experience") or ():
             if PROJECT_DESC_RE.match(line) or _looks_like_skill_csv(line):
                 continue
-            add(line)
+            add(line, loose=False)
 
     return found[:8]
+
+
+def extract_project_contexts(text: str, projects: Iterable[str]) -> dict[str, str]:
+    """Return source-CV context around every accepted project title."""
+    normalized = normalize_resume_text(text)
+    flat = " ".join(_lines(normalized))
+    contexts: dict[str, str] = {}
+    for project in projects:
+        title = str(project or "").strip()
+        if not title:
+            continue
+        match = re.search(re.escape(title), flat, flags=re.IGNORECASE)
+        if not match:
+            continue
+        start = max(0, match.start() - 120)
+        end = min(len(flat), match.end() + 700)
+        snippet = re.sub(r"\s+", " ", flat[start:end]).strip()
+        contexts[title] = snippet
+    return contexts
+
+
+# Fix 2 & Fix 3 helpers at module level so they are compiled once.
+# Rejects tokens that are clearly sentence fragments, not skill names.
+_SKILL_SENTENCE_START_RE = re.compile(
+    r"^(?:in|and|the|with|of|for|on|at|by|to|from|including|focusing|focusing\s+on|as\s+well)\b",
+    re.IGNORECASE,
+)
+# Matches "Word:Value" (no space) category-prefix patterns like "Frontend:React.js"
+_SKILL_CATEGORY_PREFIX_RE = re.compile(
+    r"^[A-Za-z][A-Za-z &/]{0,30}:[^ ]",
+)
 
 
 def extract_skills(text: str, stated: Iterable[Any] | None = None) -> list[str]:
@@ -601,13 +846,38 @@ def extract_skills(text: str, stated: Iterable[Any] | None = None) -> list[str]:
 
     def add(raw: Any) -> None:
         skill = re.sub(r"^\s*[\-\*\u2022•]+\s*", "", str(raw or ""))
+        # Strip known category-header prefixes (with or without space after colon).
+        # Handles both "Languages: Python" and "Frontend:React.js" (Fix 3).
         if ":" in skill:
             before, after = skill.split(":", 1)
-            if any(h in before.lower() for h in ("programming", "languages", "libraries", "frameworks", "tools", "core", "skills", "technologies", "databases", "ai", "ml")):
+            before_low = before.lower()
+            is_category = any(
+                h in before_low
+                for h in (
+                    "programming", "languages", "libraries", "frameworks",
+                    "tools", "core", "skills", "technologies", "databases",
+                    "ai", "ml", "frontend", "backend", "deployment", "cloud",
+                    "devops", "web", "mobile", "data", "concepts",
+                )
+            )
+            if is_category:
                 skill = after
         skill = re.sub(r"\s+", " ", skill).strip(" ,;")
         if not skill or len(skill) > 45:
             return
+        # Fix 2: Reject sentence-fragment tokens that are not real skill names.
+        if _SKILL_SENTENCE_START_RE.match(skill):
+            return
+        # Reject tokens ending with sentence punctuation (continuation fragments).
+        if skill.endswith(".") or skill.endswith(",") or skill.endswith(":"):
+            return
+        # Fix 3: Reject remaining "Category:Value" tokens that slipped through
+        # (e.g. the token itself is "Frontend:React.js" after being split by pipe).
+        if _SKILL_CATEGORY_PREFIX_RE.match(skill):
+            colon_idx = skill.index(":")
+            skill = skill[colon_idx + 1:].strip()
+            if not skill:
+                return
         lowered = skill.lower()
         if lowered in INVALID_FIELD_WORDS:
             return
@@ -625,9 +895,28 @@ def extract_skills(text: str, stated: Iterable[Any] | None = None) -> list[str]:
 
     for line in _collect_sections(text).get("skills") or ():
         clean_line = re.sub(r"^\s*[\-\*\u2022•]+\s*", "", line)
+        # Fix 2: Skip lines that are clearly prose sentences, not skill lists.
+        # A skills line that is a sentence fragment (starts with verb/preposition)
+        # and has no comma/pipe/colon separators is almost certainly an experience bullet.
+        is_prose = (
+            _SKILL_SENTENCE_START_RE.match(clean_line)
+            or (PROJECT_DESC_RE.match(clean_line) and "," not in clean_line)
+        )
+        if is_prose:
+            continue
         if ":" in clean_line:
             before, after = clean_line.split(":", 1)
-            if any(h in before.lower() for h in ("programming", "languages", "libraries", "frameworks", "tools", "core", "skills", "technologies", "databases", "ai", "ml")):
+            before_low = before.lower()
+            is_category = any(
+                h in before_low
+                for h in (
+                    "programming", "languages", "libraries", "frameworks",
+                    "tools", "core", "skills", "technologies", "databases",
+                    "ai", "ml", "frontend", "backend", "deployment", "cloud",
+                    "devops", "web", "mobile", "data", "concepts",
+                )
+            )
+            if is_category:
                 clean_line = after
         if "," in clean_line or "|" in clean_line or "/" in clean_line:
             parts = re.split(r"[,|/]", clean_line)
@@ -711,21 +1000,57 @@ def ingest_resume(text: str, llm_fields: dict[str, Any] | None = None) -> dict[s
 
 
 def sanitize_features(features: dict[str, Any], raw_text: str) -> dict[str, Any]:
-    """Keep LLM-extracted fields, then re-derive projects and skills from the source text."""
+    """
+    Merge LLM-extracted fields with heuristic parse results.
+
+    Priority: LLM wins for fields it returned, heuristic fills gaps.
+    For projects and skills, LLM candidates are used as primary source
+    (with source-evidence check), then heuristic results fill any gaps.
+    """
     if not isinstance(features, dict):
         features = {}
     raw_text = normalize_resume_text(raw_text)
     parsed = parse_resume(raw_text)
     merged = dict(parsed)
+
+    # Scalar fields: LLM wins if non-null.
     for key in ("name", "college", "degree", "role", "experience", "company", "certifications", "domains"):
         value = features.get(key)
         if value not in (None, "", [], "null"):
             merged[key] = value
-    merged["skills"] = extract_skills(raw_text, features.get("skills") or parsed.get("skills"))
+
+    # --- Skills ---
+    # LLM skills are trusted first (they understand context), then heuristic fills gaps.
+    llm_skills = features.get("skills") or []
+    heuristic_skills = parsed.get("skills") or []
+    merged["skills"] = extract_skills(raw_text, llm_skills or heuristic_skills)
+
     skill_keys = {str(s).lower() for s in merged["skills"]}
+
+    # --- Projects ---
+    # Use LLM candidates as primary; heuristic candidates as secondary (fallback).
+    llm_projects = features.get("projects") or []
+    heuristic_projects = parsed.get("projects") or []
+
+    if llm_projects:
+        # LLM provided projects: trust them (with evidence + minimal checks);
+        # then add any heuristic projects that LLM missed.
+        primary = extract_projects(raw_text, llm_projects)
+        # Fill gaps: heuristic projects not already found by LLM
+        primary_keys = {p.lower() for p in primary}
+        secondary = [
+            p for p in extract_projects(raw_text, heuristic_projects)
+            if p.lower() not in primary_keys
+        ]
+        all_projects = primary + secondary
+    else:
+        # No LLM projects: fall back entirely to heuristic.
+        all_projects = extract_projects(raw_text, heuristic_projects)
+
     merged["projects"] = [
-        p for p in extract_projects(raw_text, features.get("projects") or parsed.get("projects"))
+        p for p in all_projects
         if p.lower() not in skill_keys and not _is_skillish_title(p)
     ]
+    merged["project_contexts"] = extract_project_contexts(raw_text, merged["projects"])
     merged["raw_text"] = (raw_text or merged.get("raw_text") or "")[:6000]
     return merged

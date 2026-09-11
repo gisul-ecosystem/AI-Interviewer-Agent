@@ -386,32 +386,43 @@ def parse_resume_heuristics(text: str) -> dict:
 
 
 def extract_resume_features_llm(resume_text: str) -> dict:
-    """Heuristic parse is authoritative. Qwen may enrich name/college/role; timeouts never fail ingest."""
+    """Hybrid extraction: Qwen identifies titles; deterministic code validates them."""
     resume_text = normalize_resume_text(resume_text)
     fallback = ingest_resume(resume_text)
-    if os.environ.get("RESUME_LLM_EXTRACT", "").strip().lower() not in ("1", "true", "yes", "on"):
+    full_extract = os.environ.get("RESUME_LLM_EXTRACT", "").strip().lower() in ("1", "true", "yes", "on")
+    project_setting = os.environ.get("RESUME_PROJECT_LLM_EXTRACT", "1").strip().lower()
+    project_extract = project_setting not in ("0", "false", "no", "off")
+    if not full_extract and not project_extract:
         return fallback
-    prompt_text = (
-        "You are an AI resume analyzer. Extract the candidate's key terms and features from the resume text into JSON.\n"
-        "STRICT MANDATORY RULES:\n"
-        "1. Extract ONLY facts explicitly stated in the resume text. If a field (e.g. experience, company, degree, college, role, certifications, domains) is NOT explicitly mentioned in the CV text, set its value to null or empty list []. DO NOT invent, guess, or assume missing details.\n"
-        "2. ROLE VS DOMAIN RULE: Only set \"role\" if the candidate has formal work experience/employment listed in that position with a duration or company. If a title like \"Software Developer\" or \"Machine Learning Intern\" is written in the CV without explicit work experience duration or company, set \"role\": null and place that title in \"domains\" as their specialization.\n"
-        "4. PROJECTS: return only software project TITLES (e.g. \"Ferrite Mesh\", \"MoleCheck\"). Never descriptions, never action verbs, never skills, never languages/frameworks such as Python or TensorFlow.\n"
-        "5. SKILLS and PROJECTS are disjoint. A skill name must not appear in projects.\n\n"
-        "Return ONLY a single valid JSON object with these exact keys:\n"
-        '  "name": full name of candidate (string or null)\n'
-        '  "college": university / college / institute name (string or null)\n'
-        '  "degree": degree / qualification (string or null)\n'
-        '  "role": formal job role ONLY IF accompanied by stated work experience duration or company (string or null)\n'
-        '  "experience": explicitly stated years of experience or work duration (string or null)\n'
-        '  "company": company, organization, or employer name(s) where candidate worked (string, list of strings, or null)\n'
-        '  "skills": core technical skills, programming languages, tools & frameworks explicitly mentioned (list of strings). NEVER include section headers such as Certifications, Skills, Projects, Education, Experience.\n'
-        '  "projects": short project TITLES only, 2-6 words each, not full descriptions, never the word Certifications or other resume headings (list of strings)\n'
-        '  "certifications": explicit certifications, achievements, or honors (list of strings)\n'
-        '  "domains": specialized technical domain focus or non-employed specializations (list of strings)\n\n'
-        f'Resume Text:\n"""\n{resume_text[:4000]}\n"""\n\n'
-        "Do not include any explanation or markdown formatting outside the JSON object."
-    )
+    if full_extract:
+        prompt_text = (
+            "Extract resume facts as JSON. Use ONLY facts explicitly present in the resume; never invent or infer.\n"
+            "RULES:\n"
+            "- projects: List ONLY named software/engineering builds — apps, systems, models, websites.\n"
+            "  Each entry must be the SHORT TITLE ONLY (e.g. 'MoleCheck', 'AI vs Human Text Detection System').\n"
+            "  NEVER include: skills, libraries, section headings, employers, degrees, metrics, datasets,\n"
+            "  bullet descriptions, action verbs, or statistics.\n"
+            "- skills: List individual technology names, languages, frameworks, tools, and concepts.\n"
+            "  NEVER include category prefixes like 'Languages:', 'Frontend:', 'Backend:' — just the name.\n"
+            "  NEVER include phrases like 'experience in X' or 'knowledge of Y' — just 'X' or 'Y'.\n"
+            "Return exactly these keys: name, college, degree, role, experience, company, skills, projects, "
+            "certifications, domains.\n"
+            f'FULL RESUME:\n"""\n{resume_text[:6000]}\n"""\n'
+            "Return one JSON object only. No markdown, no explanation."
+        )
+    else:
+        prompt_text = (
+            "Identify only the candidate's named software/engineering PROJECT TITLES from this full resume.\n"
+            "PROJECT TITLE means the name of an application, product, system, model project, website, or research build.\n"
+            "DO NOT return programming languages, libraries, frameworks, tools, concepts, datasets, employers, "
+            "degrees, certifications, section headings, metrics, links, dates, or description/action phrases.\n"
+            "Examples: 'MoleCheck - built a CNN...' => 'MoleCheck'; "
+            "'Mental Health Predictor Live Demo' => 'Mental Health Predictor'.\n"
+            "If no project title is explicitly present, return an empty list. Never invent a title.\n"
+            f"Heuristic candidates (may be wrong): {json.dumps(fallback.get('projects') or [])}\n"
+            f'FULL RESUME:\n"""\n{resume_text[:6000]}\n"""\n'
+            'Return only JSON: {"projects":["exact title 1","exact title 2"]}'
+        )
 
     try:
         from interviewer.adapters.registry import get_llm
@@ -422,11 +433,18 @@ def extract_resume_features_llm(resume_text: str) -> dict:
                 LLMRequest(
                     task=LLMTask.EXTRACT,
                     messages=[
-                        Message(role="system", content="You are a high-precision JSON resume extraction engine."),
+                        Message(
+                            role="system",
+                            content=(
+                                "You are a high-precision resume parser. Distinguish named projects from "
+                                "skills and description bullets. Copy titles from the supplied resume only."
+                            ),
+                        ),
                         Message(role="user", content=prompt_text),
                     ],
-                    temperature=0.1,
+                    temperature=0.0,
                     max_tokens=600,
+                    deadline_ms=7000,
                 )
             )
 
@@ -990,6 +1008,7 @@ def _make_session(features: dict, role_override: str | None = None, raw_resume_t
             "skills": planned_skills,
             "cv_skills": cv_skills,
             "projects": projects,
+            "project_contexts": features.get("project_contexts") or {},
             "certifications": features.get("certifications", []),
             "domains": features.get("domains", []),
             "resume_context": resume_ctx,
