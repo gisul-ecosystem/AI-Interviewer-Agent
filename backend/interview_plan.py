@@ -475,7 +475,7 @@ def build_interview_plan(
         "skill_names": skill_names,
         "skill_slots": skill_slots,
         "skill_questions_source": "fallback",
-        "structure": "warmup -> projects -> oops/dsa -> cv skills -> closing",
+        "structure": "warmup -> 4 questions per project -> oops/dsa -> cv skills -> closing",
         "duration_seconds": DURATION_SECONDS,
         "wrap_up_seconds": WRAP_UP_SECONDS,
         "questions_per_project": QUESTIONS_PER_PROJECT,

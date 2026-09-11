@@ -40,6 +40,7 @@ let sessionInitialization = null;
 let interviewDurationSeconds = 900;
 let interviewEnded = false;
 let agendaConfirmed = false;
+let pendingAgendaAfterUpload = false;
 let openingGreeting = '';
 let speakQueue = [];
 let speakChain = Promise.resolve();
@@ -295,7 +296,8 @@ async function showAgendaConfirmation() {
   renderAgendaTags(agendaProjects, projects, 'No software projects found — re-upload the resume');
   renderAgendaTags(agendaSkills, skills, 'Skills will follow the projects');
   if (agendaMeta) {
-    agendaMeta.innerText = `${data.duration_minutes || 15}-minute ${data.role_label || 'technical'} interview`;
+    const per = data.questions_per_project || 4;
+    agendaMeta.innerText = `${data.duration_minutes || 15}-minute ${data.role_label || 'technical'} interview · ${per} questions on each project, then OOPs, DSA, and skills`;
   }
   if (agendaOverlay) agendaOverlay.hidden = false;
   return true;
@@ -1555,8 +1557,8 @@ if (quickUploadBtn) {
   });
 }
 
-closeSettingsBtn.addEventListener('click', () => settingsModal.classList.remove('active'));
-cancelSettingsBtn.addEventListener('click', () => settingsModal.classList.remove('active'));
+closeSettingsBtn.addEventListener('click', () => closeSettingsAndShowAgenda());
+cancelSettingsBtn.addEventListener('click', () => closeSettingsAndShowAgenda());
 
 saveSettingsBtn.addEventListener('click', async () => {
   currentSystemPrompt = promptTextarea.value.trim();
@@ -1569,8 +1571,16 @@ saveSettingsBtn.addEventListener('click', async () => {
   } catch (err) {
     console.error('Failed to save prompt:', err);
   }
-  settingsModal.classList.remove('active');
+  await closeSettingsAndShowAgenda();
 });
+
+async function closeSettingsAndShowAgenda() {
+  settingsModal.classList.remove('active');
+  if (pendingAgendaAfterUpload && activeResumeToken) {
+    pendingAgendaAfterUpload = false;
+    await showAgendaConfirmation();
+  }
+}
 
 
 // ─── Resume Drag & Drop / File Select Handler ─────────────────────────────────
@@ -1661,9 +1671,13 @@ async function uploadResumeFile(file) {
 
       extractedFeaturesCard.style.display = 'flex';
       setStatus('speaking', 'Resume Features Extracted!');
+      pendingAgendaAfterUpload = true;
+      if (saveSettingsBtn) {
+        saveSettingsBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        saveSettingsBtn.focus();
+      }
 
       await loadCandidateProfile();
-      await showAgendaConfirmation();
 
       setTimeout(() => setStatus('', 'Ready'), 2500);
 

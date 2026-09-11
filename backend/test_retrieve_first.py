@@ -37,10 +37,12 @@ def test_retrieve_first_modes():
         question_bank_rag=question_bank_rag,
         interview_plan=plan,
     )
-    assert dec.mode == "GENERATE", dec.mode
-    assert dec.needs_llm is True
-    assert dec.wants_qwen_phrasing(intent) is True
+    assert dec.mode == "TEMPLATE", dec.mode
+    assert dec.needs_llm is False
+    assert dec.scripted is True
+    assert dec.wants_qwen_phrasing(intent) is False
     assert "molecheck" in (dec.spoken_question or "").lower()
+    assert "first project" in (dec.spoken_question or "").lower()
 
     repeat = question_engine.decide(
         candidate_answer="sorry could you repeat the question please",
@@ -55,7 +57,7 @@ def test_retrieve_first_modes():
     assert repeat.needs_llm is False
     assert dec.spoken_question in repeat.spoken_question
 
-    print("[SUCCESS] Warmup uses Qwen GENERATE; repeat stays scripted.")
+    print("[SUCCESS] Warmup uses a scripted project bridge; repeat stays scripted.")
 
 
 def test_grounded_followup_quality():
@@ -85,10 +87,15 @@ def test_grounded_followup_quality():
 
     good = (
         f"On Autonomous Drone Navigation you used {spec['anchor_term']} — "
-        f"in simple terms, what does it do, and which part did you write?"
+        f"what did you implement yourself, and how did sensor data move through it?"
     )
     assert is_quality_followup(good, spec) is True
     assert finalize_followup(good, spec) == good
+    canned_overfit = (
+        "On Autonomous Drone Navigation, what did you do about overfitting "
+        "and did validation actually improve?"
+    )
+    assert is_quality_followup(canned_overfit, spec) is False
 
     state = {
         "stage": "project_deep_dive",
@@ -175,9 +182,12 @@ def test_skip_does_not_repeat_same_question():
         interview_plan=plan,
         exclude_questions=state.get("questions_already_asked") or [first.spoken_question],
     )
-    assert skipped.mode == "TEMPLATE"
+    assert skipped.mode == "GENERATE"
     assert first.spoken_question not in (skipped.spoken_question or "")
-    assert "skip" in (skipped.spoken_question or "").lower() or "Credit Risk" in (skipped.spoken_question or "") or "Python" in (skipped.spoken_question or "") or "PyTorch" in (skipped.spoken_question or "") or "Object-Oriented" in (skipped.spoken_question or "") or "Data Structures" in (skipped.spoken_question or "")
+    spoken_skip = (skipped.spoken_question or "").lower()
+    assert "molecheck" in spoken_skip
+    assert state["stage"] == "project_deep_dive"
+    assert state.get("current_project_index", 0) == 0
 
     skip2_eval = evaluate_turn_answer("skip", {"question": skipped.spoken_question}, "UNKNOWN_OR_SKIP")
     fsm = InterviewFSM(state)
@@ -194,6 +204,7 @@ def test_skip_does_not_repeat_same_question():
         exclude_questions=state.get("questions_already_asked") or [],
     )
     assert skipped2.spoken_question != skipped.spoken_question
+    assert state.get("current_project_index", 0) == 0
     print("[SUCCESS] Skip moves on instead of repeating the same question.")
 
 
@@ -302,7 +313,7 @@ def test_project_thread_climbs_one_ladder():
             eval_res={"depth": "med", "missing_concepts": [], "score": 0.65},
             candidate_dict=cv,
             topic="Project: MoleCheck",
-            focus=("what_used", "how_built", "why_simple")[turn],
+            focus=("what_used", "how_built", "regularization")[turn],
             project_thread=thread,
             project_name="MoleCheck",
         )
@@ -311,10 +322,11 @@ def test_project_thread_climbs_one_ladder():
         thread = spec["project_thread"]
 
     assert len(set(probes)) == 3, probes
-    assert probes == ["what_used", "how_built", "why_simple"], probes
+    assert probes == ["what_used", "how_built", "regularization"], probes
     assert all("MoleCheck" in text for text in spoken)
     deep = ("bottleneck", "drift", "roll back", "rollback", "broke first")
     assert not any(word in text.lower() for text in spoken for word in deep), spoken
+    assert any("overfit" in text.lower() or "augment" in text.lower() or "implement" in text.lower() for text in spoken), spoken
 
     last = plan_followup(
         answers[-1],
@@ -348,8 +360,8 @@ def test_project_thread_climbs_one_ladder():
     sys_msg = prompt["messages"][0]["content"]
     assert "WRITE THE NEXT INTERVIEW QUESTION" in sys_msg
     assert "last answer" in sys_msg.lower()
-    assert "basic" in sys_msg.lower()
-    assert "do not go deeper" in sys_msg.lower() or "do not go one level deeper" in sys_msg.lower()
+    assert "follow this" in sys_msg.lower() or "follow that answer" in sys_msg.lower()
+    assert "dictionary definition" in sys_msg.lower()
     print("[SUCCESS] Project follow-ups climb one ladder and reference the last turn.")
 
 
@@ -367,12 +379,37 @@ def test_followup_uses_spoken_technical_terms():
     blob = " ".join([spec["anchor_term"], *(spec["mentioned_terms"] or []), spec["spoken_fallback"]]).lower()
     assert "keras" in blob or "mobilenet" in blob or "augmentation" in blob, spec
     assert "molecheck" in spec["spoken_fallback"].lower()
-    assert spec["probe_type"] == "what_used"
-    assert "simple" in spec["spoken_fallback"].lower() or "what is" in spec["spoken_fallback"].lower()
-    from backend.followup_engine import finalize_followup
+    assert spec["probe_type"] == "how_built"
+    blob_q = spec["spoken_fallback"].lower()
+    assert "implement" in blob_q or "built" in blob_q or "train" in blob_q or "wrote" in blob_q, spec["spoken_fallback"]
+    from backend.followup_engine import finalize_followup, is_quality_followup
     deep = "On MoleCheck you used Keras — when the classifier drifted, what broke first and what would make you roll it back?"
     assert finalize_followup(deep, spec) == spec["spoken_fallback"]
+    overfit = (
+        "On MoleCheck you used Keras — the malignant class was small. "
+        "What did you do about overfitting, and did validation actually improve?"
+    )
+    assert is_quality_followup(overfit, spec) is True
+    off_topic = "On MoleCheck, how would you design an LRU cache so get and put are both O(1)?"
+    assert is_quality_followup(off_topic, spec) is False
     print("[SUCCESS] Follow-ups latch onto spoken technical terms.")
+
+
+def test_probe_follows_what_they_said():
+    from backend.followup_engine import probe_from_answer
+
+    assert probe_from_answer(
+        "We used ROS and Kalman filters to navigate without GPS.",
+        [],
+    ) == "how_built"
+    assert probe_from_answer(
+        "I fine-tuned MobileNetV2 with data augmentation because the malignant class was small.",
+        ["how_built"],
+    ) == "regularization"
+    assert probe_from_answer(
+        "I tracked sensitivity and specificity instead of raw accuracy.",
+        ["how_built", "regularization"],
+    ) == "metric"
 
 
 def test_parse_qwen_skill_questions_from_upload():
@@ -539,6 +576,74 @@ def test_dsa_question_is_not_a_project_followup():
     print("[SUCCESS] DSA questions stay DSA, not project follow-ups.")
 
 
+def test_topic_changes_use_scripted_bridges():
+    from backend.question_engine import question_engine
+    from backend.session_manager import create_session
+    from backend.prompt_builder import build_interviewer_prompt
+
+    session = create_session({
+        "name": "Aditya",
+        "skills": ["TensorFlow", "Python"],
+        "projects": ["MoleCheck", "Mental Health Predictor"],
+        "role": "AI / ML Engineer",
+    })
+    candidate = session["candidate"]
+    plan = session["interview_plan"]
+    assert plan["questions_per_project"] == 4
+
+    second = question_engine.decide(
+        candidate_answer="On MoleCheck I used Keras and MobileNetV2.",
+        intent="TECHNICAL_ANSWER",
+        fsm_state={
+            "stage": "project_deep_dive",
+            "difficulty_level": 1,
+            "current_project_index": 1,
+            "project_question_count": 0,
+            "questions_already_asked": [],
+            "action": "CONTINUE",
+        },
+        eval_res={"depth": "med", "score": 0.6, "is_skip": False},
+        candidate_dict=candidate,
+        interview_plan=plan,
+    )
+    spoken = (second.spoken_question or "").lower()
+    assert second.scripted is True
+    assert second.mode == "TEMPLATE"
+    assert "molecheck" in spoken
+    assert "mental health" in spoken
+    assert "move" in spoken or "let's" in spoken
+
+    skills = question_engine.decide(
+        candidate_answer="Random Forest for the second project.",
+        intent="TECHNICAL_ANSWER",
+        fsm_state={
+            "stage": "skills_assessment",
+            "difficulty_level": 1,
+            "current_skill_index": 0,
+            "skill_question_count": 0,
+            "questions_already_asked": [],
+            "action": "CONTINUE",
+        },
+        eval_res={"depth": "med", "score": 0.6, "is_skip": False},
+        candidate_dict=candidate,
+        interview_plan=plan,
+    )
+    skill_spoken = (skills.spoken_question or "").lower()
+    assert "projects" in skill_spoken
+    assert "fund" in skill_spoken or "object-oriented" in skill_spoken
+
+    prompt = build_interviewer_prompt(
+        fsm_state={"stage": "project_deep_dive", "questions_already_asked": []},
+        candidate_dict=candidate,
+        candidate_answer="We used Keras.",
+        question_decision=second,
+    )
+    sys_msg = prompt["messages"][0]["content"]
+    assert "4 questions" in sys_msg.lower() or "exactly 4" in sys_msg.lower()
+    assert "TOPIC CHANGES" in sys_msg
+    print("[SUCCESS] Topic changes close the last topic, then open the next; 4 questions per project.")
+
+
 if __name__ == "__main__":
     test_retrieve_first_modes()
     test_grounded_followup_quality()
@@ -547,6 +652,8 @@ if __name__ == "__main__":
     test_qwen_phrasing_keeps_policy()
     test_project_thread_climbs_one_ladder()
     test_followup_uses_spoken_technical_terms()
+    test_probe_follows_what_they_said()
     test_parse_qwen_skill_questions_from_upload()
     test_plan_locks_skill_bases_and_three_questions()
     test_dsa_question_is_not_a_project_followup()
+    test_topic_changes_use_scripted_bridges()

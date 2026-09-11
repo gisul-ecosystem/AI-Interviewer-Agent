@@ -1,8 +1,8 @@
 """
 15-minute interview structure.
 
-  Opening        1 spoken turn   intro + first project question
-  Projects       2 questions each, up to 2 CV projects
+  Opening        1 spoken turn   intro, then a bridge into project 1
+  Projects       4 questions each, up to 2 CV projects
   Fundamentals   OOPs + DSA — 3 questions each, locked at resume upload
   Skills         3 questions each, locked at resume upload from bank + CV terms
   Closing        1 wrap-up turn
@@ -56,8 +56,8 @@ def opening_greeting(
     skill = ", ".join(cv_skills[:2]) or "the skills on your resume"
     return (
         f"Hi {who}, I'm your interviewer for this {mins}-minute {role_label} conversation. "
-        f"We'll start with a short introduction, then go deep on {proj}, "
-        f"cover OOPs and DSA, and finish with {skill}. Please introduce yourself and the work you're proudest of."
+        f"We'll start with a short introduction, then {QUESTIONS_PER_PROJECT} questions on each of {proj}, "
+        f"then OOPs and DSA, and finish with {skill}. Please introduce yourself and the work you're proudest of."
     )
 
 

@@ -45,9 +45,10 @@ def test_modular_pipeline():
     )
     print(f"[Turn 1 Self-Intro] Mode: {dec1.mode}, Target Topic: {dec1.target_topic}")
     assert intent1 == "SELF_INTRO"
-    assert dec1.mode == "GENERATE"
+    assert dec1.mode == "TEMPLATE"
+    assert dec1.scripted is True
     assert "molecheck" in (dec1.spoken_question or "").lower()
-    assert dec1.followup_spec
+    assert "first project" in (dec1.spoken_question or "").lower()
 
     # 3. Turn 2: Deep Technical Answer -> Matches Question Bank (Mode A: RETRIEVE or Mode B: ADAPT)
     ans2 = "How did you handle overfitting — dropout, weight decay, early stopping? For overfitting in PyTorch, I use dropout layers with 0.3 probability, weight decay L2 regularization, and early stopping on validation loss."

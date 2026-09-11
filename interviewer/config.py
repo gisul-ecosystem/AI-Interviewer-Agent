@@ -120,7 +120,7 @@ class InterviewSettings:
     question_bank_path: str = field(
         default_factory=lambda: _env("QUESTION_BANK_PATH", str(BASE_DIR / "question_bank.json"))
     )
-    project_questions: int = field(default_factory=lambda: _env_int("PROJECT_QUESTIONS", 2))
+    project_questions: int = field(default_factory=lambda: _env_int("PROJECT_QUESTIONS", 4))
     skill_questions: int = field(default_factory=lambda: _env_int("SKILL_QUESTIONS", 3))
     max_projects: int = field(default_factory=lambda: _env_int("MAX_PROJECTS", 2))
     max_skills: int = field(default_factory=lambda: _env_int("MAX_SKILLS", 2))

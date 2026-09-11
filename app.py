@@ -1303,6 +1303,7 @@ async def preview_agenda(payload: dict = None):
         "duration_minutes": max(1, int(round(duration / 60))),
         "projects": plan.get("project_names") or [],
         "skills": plan.get("skill_names") or [],
+        "questions_per_project": plan.get("questions_per_project") or 4,
         "opening_greeting": greeting,
     }
 

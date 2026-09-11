@@ -29,12 +29,14 @@ def _style_block(interview_style: str, target_role: str, *, skill_phase: bool = 
         )
     return (
         f"This is a technical interview for {target_role}.\n"
-        "Ask BASIC technical questions in simple student-level terms.\n"
-        "Ask what they used, what that tool does, how they used it, or why they picked it.\n"
-        "Do not ask about production drift, bottlenecks, rollback, system design, or research-level details.\n"
-        "Do not invent libraries they did not name.\n"
-        "GOOD: 'On MoleCheck you used Keras — what does Keras do there, and which part did you write?'\n"
-        "BAD: 'When the classifier drifted, what broke first and what would make you roll it back?'"
+        "Your next question MUST follow a specific claim in THEIR last answer.\n"
+        "Name the tool, step, metric, or problem they just said, then go one level deeper on that same claim.\n"
+        "Do not invent a topic they did not mention. Do not ask a dictionary definition.\n"
+        "Do not ask about production drift, rollback, SLAs, or system design.\n"
+        "GOOD: they said they fine-tuned MobileNet because the malignant class was small → "
+        "'On MoleCheck you said the malignant class was small — how did you train MobileNet so it did not just memorize the majority class?'\n"
+        "BAD: they said they used ROS and Kalman filters → 'What did you do about overfitting?'\n"
+        "BAD: 'In simple terms, what is Keras?'"
     )
 
 
@@ -72,6 +74,10 @@ def build_interviewer_prompt(
     decision_directive = getattr(question_decision, "directive", "Generate ONE concise follow-up question.") if question_decision else "Generate ONE concise follow-up question."
     selected_question = getattr(question_decision, "selected_question", None) if question_decision else None
     spec = getattr(question_decision, "followup_spec", None) or {} if question_decision else {}
+    plan = candidate_dict.get("interview_plan") or {}
+    per_proj = max(1, int(plan.get("questions_per_project") or 4))
+    project_names = [str(p) for p in (plan.get("project_names") or projects)[:2] if p]
+    proj_line = " then ".join(project_names) if project_names else "the resume projects"
 
     stage = fsm_state.get("stage", "project_deep_dive")
     skill_phase = (
@@ -135,30 +141,48 @@ def build_interviewer_prompt(
         prev_probe = spec.get("previous_probe") or ""
         prev_anchor = spec.get("previous_anchor") or ""
         last_excerpt = spec.get("previous_answer_excerpt") or ""
+        q_num = spec.get("ladder_step") or 1
+        probe = str(spec.get("probe_type") or "how_built")
+        hooks = ", ".join(spec.get("answer_hooks") or []) or mentioned
+        last_full = (candidate_answer or spec.get("last_answer") or "")[:1200]
+        probe_hint = {
+            "what_used": "Backup only if the answer was thin: ask what they implemented with the named tool.",
+            "how_built": "Backup only if the answer was thin: ask how they built the thing they just named.",
+            "regularization": "Backup only if they already talked about a model/training: ask what they changed when it overfit or failed on held-out data.",
+            "metric": "Backup only if they already talked about results: ask which metric they trusted.",
+            "why_simple": "Backup only if the answer was thin: ask why they picked that option.",
+        }.get(probe, "Follow a concrete claim from their last answer.")
         thread_line = (
-            f"This is question {spec.get('ladder_step') or 1} in the same thread. "
+            f"This is question {q_num} of {per_proj} on this project. "
             f"You already asked about '{prev_probe}' on '{prev_anchor}'. "
-            "Ask a DIFFERENT basic technical question — do not go deeper.\n"
+            f"Follow THIS answer, not a canned script. Stay on this project until {per_proj} questions are done.\n"
             if prev_probe
-            else "This is the opening question in this thread. Set up the topic, then ask one basic technical question.\n"
+            else (
+                f"This is question 1 of {per_proj} on this project. "
+                "Name the project, then ask about something they just said.\n"
+            )
         )
         mode_instruction = (
-            "MODE: GENERATE — YOU WRITE THE NEXT INTERVIEW QUESTION\n"
-            "Python chose the topic and probe. You write the actual spoken question from their last answer.\n"
-            "Do NOT read a question bank. Do NOT ask a generic 'walk me through your project'.\n"
-            "Stay at BASIC technical terms. Do not go one level deeper.\n"
-            "Ask what a tool is, how they used it, or why they picked it — in simple language.\n"
-            "Do NOT ask about bottlenecks, drift, rollback, failure-first, or production metrics.\n"
+            "MODE: GENERATE — WRITE THE NEXT INTERVIEW QUESTION FROM THEIR LAST ANSWER\n"
+            "You are live. The candidate just answered. Your only job is to follow that answer.\n"
+            f"THEIR LAST ANSWER (follow this):\n\"\"\"{last_full or '(thin or empty — use the fallback)'}\"\"\"\n"
+            "Do this:\n"
+            "1. Pick ONE concrete claim they made (a tool, model, step, data problem, or number).\n"
+            "2. Repeat that claim in a few words so they hear you were listening.\n"
+            "3. Ask ONE deeper question about THAT claim — what they implemented, why, what failed, or how they checked it.\n"
+            "4. Do not ask about a technique they never mentioned. No overfitting unless they talked about a model or training. "
+            "No hash maps unless they said that. No other project.\n"
+            "5. Do not ask a dictionary definition. Do not restart with 'walk me through the project'.\n"
+            "Do NOT jump to OOPs or DSA on this turn.\n"
+            "If they skipped or said they don't know, do not scold them; ask a new question on the same project using the fallback.\n"
             f"{stay_on}{thread_line}"
-            "Acknowledge one concrete thing they just said (3-8 words), then ask ONE new technical question.\n"
-            f"Name this term from their last answer: {anchor}\n"
-            f"Probe this one thing: {must_probe} ({spec.get('probe_type') or 'what_used'})\n"
-            f"Terms they actually said: {mentioned}\n"
-            f"Their last answer: {(candidate_answer or '')[:700]}\n"
+            f"Claims/terms they actually said: {hooks}\n"
+            f"Name this term if it appeared: {anchor}\n"
+            f"{probe_hint} ({probe})\n"
             f"Previous answer excerpt: {last_excerpt or 'none'}\n"
-            f"Fallback only if you cannot stay grounded: {fallback}\n"
+            f"Fallback only if you cannot follow their words: {fallback}\n"
             f"{style_rule}\n"
-            f"One question. 12-40 words. End with ?. Keep difficulty at BASIC (1/3) on {target_topic}."
+            f"One question. 16-48 words. End with ?. Difficulty {target_diff}/3 on {target_topic}."
         )
         temperature = 0.4
 
@@ -170,17 +194,33 @@ def build_interviewer_prompt(
         if skill_phase
         else
         "- One short reaction to what they just said, then one question. No lecture.\n"
-        "- Use a noun they actually used (a library, metric, class, or project). Avoid \"that\", \"your approach\", \"tell me more\".\n"
-        "- Sound curious, not robotic. Do not read the planned ask word-for-word if you can say the same thing more naturally.\n"
+        "- Use a noun they actually used (a library, model, metric, or project). Avoid \"that\", \"your approach\", \"tell me more\".\n"
+        "- Sound like a technical interviewer who has read their answer, not a quiz card.\n"
         "- Use their name at most once, and only if it is natural.\n"
-        "- This is one thread. The next question should feel like it follows their last sentence."
+        "- This is one thread. The next question should follow a claim in their last sentence, not restart."
     )
 
-    sys_prompt = f"""You are the interviewer in a live {target_role} voice interview with {c_name}.
+    agenda = (
+        f"INTERVIEW AGENDA — follow this order. Python owns the stage; you do not skip ahead.\n"
+        f"1. Short intro.\n"
+        f"2. {per_proj} questions on project 1 ({proj_line.split(' then ')[0] if project_names else 'first project'}).\n"
+        f"3. {per_proj} questions on project 2"
+        f"{(' (' + project_names[1] + ')') if len(project_names) > 1 else ''}, then stop that project.\n"
+        f"4. OOPs, then DSA, then CV skills. Skills are not project follow-ups.\n"
+        f"5. Close.\n"
+        "TOPIC CHANGES: When the topic changes, first thank them for the previous topic in one short sentence, "
+        "name the new topic, then ask ONE question. Never mix two topics in one turn. "
+        f"Never leave a project before {per_proj} questions unless Python already changed the stage."
+    )
+
+    sys_prompt = f"""You are a sharp technical interviewer in a live {target_role} voice interview with {c_name}.
 Speak the way a strong human interviewer speaks on a call: calm, specific, one beat ahead of the candidate.
+On projects you follow what they just said: name their claim, then go one level deeper on that same claim.
 
 You do not run the interview. Python already chose the stage, topic, and planned ask.
 Your only job is to say the next question out loud so it sounds like a conversation, not a form.
+
+{agenda}
 
 VOICE
 {voice}
@@ -191,11 +231,12 @@ HARD RULES
 3. Never invent employers, projects, tools, or numbers that are not in the profile or their answer.
 4. Never repeat a question from PREVIOUSLY_ASKED_QUESTIONS.
 5. Stay inside {target_role}. Prefer overlapping skills: {primary_skills}.
-6. 12 to 40 spoken words.
+6. 16 to 48 spoken words.
 7. Yeah / yes / yep / sorry / well / okay are acknowledgements, not tools. Never treat them as technologies.
 8. In TEMPLATE mode, keep the planned technical ask. Rephrase it; do not replace it with a different concept.
-9. On project questions, stay at BASIC terms. Never ask about drift, bottlenecks, rollback, or production failure.
+9. On project questions, follow a specific claim from their last answer. Do not ask about a technique they never mentioned. Never ask about drift, rollback, SLAs, or production failure.
 10. On skill questions (OOPs, DSA, Python, …), never mention a project. Skills and projects are separate.
+11. Do not jump from project 1 to project 2, or from projects to OOPs/DSA, unless POLICY says TRANSITION. Python will ask DSA after OOPs; you do not skip it.
 
 STAGE: {stage}
 POLICY: {decision_directive}
@@ -253,5 +294,5 @@ POLICY: {decision_directive}
             {"role": "user", "content": json.dumps(user_payload, indent=2)}
         ],
         "temperature": temperature,
-        "max_tokens": 160,
+        "max_tokens": 200,
     }

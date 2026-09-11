@@ -4,11 +4,12 @@ Grounded follow-up planner.
 Quality does not come from asking the LLM to "be a good interviewer".
 It comes from:
   1. Anchors from THIS resume + this utterance (Qwen maps "yeah I used this")
-  2. Staying on the SAME project and asking the next BASIC technical question
+  2. Staying on the SAME project and asking the next implementation question
   3. Asking a question that names the project and that term
-  4. Rejecting generic or too-deep LLM output and speaking the filled template instead
+  4. Rejecting generic or production-senior LLM output and speaking the filled template instead
 
-Project probes stay at student-level terms: what they used, how they used it, why they picked it.
+Project probes go deeper than dictionary definitions: what they used, how they built it,
+what they did about overfitting or bad data, and how they measured success.
 No global product list. A Rust/gRPC CV works the same as an AIML CV.
 """
 
@@ -24,19 +25,21 @@ STOPWORDS = {
     "about", "just", "like", "also", "very", "some", "when", "what", "which",
 }
 
-PROJECT_LADDER = ("what_used", "how_built", "why_simple")
+PROJECT_LADDER = ("what_used", "how_built", "regularization", "metric")
 DEEP_PROJECT_LADDER = ("implementation", "tradeoff", "metric")
 FOCUS_TO_PROBE = {
-    "implementation": "what_used",
+    "implementation": "how_built",
     "what_used": "what_used",
     "how_built": "how_built",
-    "why_simple": "why_simple",
-    "why": "why_simple",
-    "failure": "how_built",
-    "failure_mode": "how_built",
-    "metric": "how_built",
-    "tradeoff": "why_simple",
-    "missing_concept": "what_used",
+    "regularization": "regularization",
+    "overfitting": "regularization",
+    "why_simple": "metric",
+    "why": "metric",
+    "failure": "regularization",
+    "failure_mode": "regularization",
+    "metric": "metric",
+    "tradeoff": "metric",
+    "missing_concept": "how_built",
 }
 DEEP_FOCUS_TO_PROBE = {
     "implementation": "implementation",
@@ -49,25 +52,28 @@ DEEP_FOCUS_TO_PROBE = {
 
 PROBE_TEMPLATES = {
     "what_used": (
-        "In simple terms, what is {anchor}, and what job did it do in your work?"
+        "What did you actually implement with {anchor}, and which part was yours versus pretrained or off the shelf?"
     ),
     "how_built": (
-        "How did you use {anchor} step by step — what went in, and what came out?"
+        "Walk through how you built with {anchor}: data in, training or pipeline steps, and the code you wrote."
+    ),
+    "regularization": (
+        "With {anchor}, did the model overfit or struggle on held-out data? What did you change, and did it help?"
     ),
     "why_simple": (
-        "Why did you pick {anchor} instead of another common option, in simple terms?"
+        "Why did you pick {anchor} instead of a more common option, and what broke if you chose wrong?"
     ),
     "missing_concept": (
-        "In simple terms, how did {missing} show up in that work, and what did you do with it?"
+        "How did {missing} show up in that work, and what did you personally do about it?"
     ),
     "failure_mode": (
-        "When something went wrong with that part, what happened, and how did you notice it?"
+        "When {anchor} failed on unseen data, what went wrong, and what did you change?"
     ),
     "tradeoff": (
-        "Why {anchor} instead of a more common option, in simple terms?"
+        "Why {anchor} instead of a more common option, and what did you give up?"
     ),
     "metric": (
-        "How did you check that {anchor} was working — what number or result did you look at?"
+        "How did you evaluate {anchor}? Why that metric, and what did a miss look like?"
     ),
     "implementation": (
         "Walk me through how you used {anchor}: which part did you write, and how did data move?"
@@ -98,58 +104,66 @@ CONNECTED_BEHAVIORAL_TEMPLATES = {
 
 CONNECTED_PROJECT_TEMPLATES = {
     "what_used": (
-        "On {project} you mentioned {anchor}. In simple terms, what is {anchor}, "
-        "and what job did it do in this project?"
+        "On {project} you mentioned {anchor}. What did you actually implement with it — "
+        "architecture, layers, or training — and what was yours versus pretrained or a library default?"
     ),
     "how_built": (
-        "On {project}, how did you use {anchor} — what went in, what came out, "
-        "and which part did you write yourself?"
+        "On {project}, walk me through how you built with {anchor}: the data split, "
+        "what went into the model or pipeline, and which part you wrote yourself."
+    ),
+    "regularization": (
+        "On {project} you used {anchor}. Did it overfit or fail on held-out data? "
+        "What did you change — dropout, augmentation, early stopping, class weights — and did validation improve?"
     ),
     "why_simple": (
-        "On {project}, why did you pick {anchor} instead of another common option, in simple terms?"
+        "On {project}, why {anchor} instead of a more common option, and what would have broken with the easier pick?"
     ),
     "implementation": (
-        "On {project} you used {anchor}. In simple terms, what did {anchor} do, "
-        "and which part did you write?"
+        "On {project} you used {anchor}. What did you implement yourself, and how did data move through it?"
     ),
     "failure_mode": (
-        "On {project}, when {anchor} did not work as expected, what happened and how did you notice?"
+        "On {project}, when {anchor} failed on unseen data, what went wrong and what did you change?"
     ),
     "metric": (
-        "On {project}, how did you check that {anchor} was working — what result did you look at?"
+        "On {project}, how did you evaluate {anchor}? Why that metric instead of raw accuracy, "
+        "and what did a wrong prediction look like?"
     ),
     "missing_concept": (
-        "On {project} you mentioned {anchor}. In simple terms, how did {missing} show up there?"
+        "On {project} you mentioned {anchor}. How did {missing} show up there, and what did you do about it?"
     ),
     "tradeoff": (
-        "On {project}, why {anchor} instead of another common option, in simple terms?"
+        "On {project}, why {anchor} instead of a more common option, and what did that choice cost you?"
     ),
 }
 
 SAME_ANCHOR_PROJECT_TEMPLATES = {
     "what_used": (
-        "On {project}, which main library, model, or tool did you use, and what did it actually do?"
+        "On {project}, which model or library did you use, and which part of it did you implement yourself?"
     ),
     "how_built": (
-        "On {project}, walk me through the basic steps you built — data in, the code or model, and the result out."
+        "On {project}, walk me through how you actually built it: data in, training or pipeline, and the code you wrote."
+    ),
+    "regularization": (
+        "On {project}, models often memorize the training set. What did you do about overfitting or class imbalance, "
+        "and how did you know it helped on validation?"
     ),
     "why_simple": (
-        "On {project}, why that library or model, in simple terms a classmate would understand?"
+        "On {project}, why that model or library instead of a simpler baseline, and what failed if you chose wrong?"
     ),
     "implementation": (
-        "On {project}, which main tool or model did you use, and what job did it do?"
+        "On {project}, which model or tool did you use, and what did you personally implement?"
     ),
     "failure_mode": (
-        "On {project}, when something did not work, what happened and how did you notice?"
+        "On {project}, when the model failed on unseen data, what went wrong and what did you change?"
     ),
     "metric": (
-        "On {project}, how did you check it was working — what result or number did you look at?"
+        "On {project}, which metric did you trust, why not accuracy alone, and what did a miss look like?"
     ),
     "missing_concept": (
-        "On {project}, in simple terms, how did {missing} show up in what you built?"
+        "On {project}, how did {missing} show up in what you built, and what did you do about it?"
     ),
     "tradeoff": (
-        "On {project}, why that tool or model instead of a more common option?"
+        "On {project}, why that approach instead of a more common option, and what did you give up?"
     ),
 }
 
@@ -224,6 +238,59 @@ DEEP_PROJECT_ASK = re.compile(
     re.IGNORECASE,
 )
 
+_THIN_ANSWER = re.compile(
+    r"^(yeah|yes|yep|ok|okay|sure|skip|pass|idk|next|no|nah|"
+    r"i don't know|i do not know|not sure|nothing)[\s.!?]*$",
+    re.IGNORECASE,
+)
+_ANSWER_METRIC = re.compile(
+    r"\b(accuracy|precision|recall|f1|auc|sensitivity|specificity|"
+    r"confusion\s+matrix|metric|false\s+negatives?|false\s+positives?)\b",
+    re.IGNORECASE,
+)
+_ANSWER_REG = re.compile(
+    r"\b(overfit(?:ting)?|dropout|augment(?:ation)?|class[- ]weights?|"
+    r"imbalance|early\s+stopp?(?:ing)?|regulariz(?:e|ed|ation)?|"
+    r"validation\s+loss|held[- ]out)\b",
+    re.IGNORECASE,
+)
+_ANSWER_ML = re.compile(
+    r"\b(keras|tensorflow|pytorch|sklearn|scikit[- ]learn|cnn|lstm|"
+    r"transformer|neural|deep\s+learning|mobilenet\w*|resnet\w*|bert|"
+    r"xgboost|random\s+forest|classifiers?|train(?:ed|ing)|epochs?|"
+    r"fine[- ]tun(?:e|ed|ing)?)\b",
+    re.IGNORECASE,
+)
+
+
+def thin_answer(answer: str) -> bool:
+    text = " ".join(str(answer or "").split()).strip()
+    if len(text.split()) < 6:
+        return True
+    return bool(_THIN_ANSWER.match(text))
+
+
+def probe_from_answer(answer: str, asked: Optional[List[str]] = None) -> str:
+    """Pick the next probe from what they just said, not a fixed Q3=overfitting slot."""
+    used = {str(p) for p in (asked or []) if p}
+    text = answer or ""
+    if _ANSWER_METRIC.search(text) and "metric" not in used:
+        return "metric"
+    if _ANSWER_REG.search(text) and "regularization" not in used:
+        return "regularization"
+    if _ANSWER_ML.search(text):
+        if "how_built" not in used:
+            return "how_built"
+        if "regularization" not in used:
+            return "regularization"
+        if "metric" not in used:
+            return "metric"
+    if "how_built" not in used:
+        return "how_built"
+    if "metric" not in used:
+        return "metric"
+    return "what_used"
+
 
 def _next_probe(
     asked: List[str],
@@ -244,7 +311,7 @@ def _next_probe(
     for step in ladder:
         if step not in used:
             return step
-    return requested or ("how_built" if basic else "metric")
+    return requested or ("how_built" if basic else "regularization")
 
 
 _ANSWER_TERM_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9+#./-]{2,}\b")
@@ -381,8 +448,8 @@ def plan_followup(
     """
     Decide the single probe for this turn.
 
-    Project follow-ups stay on the same resume project and ask the next
-    basic technical question: what they used → how they used it → why they picked it.
+    Project follow-ups stay on the same resume project and follow the last
+    answer. The probe is a backup angle when the utterance is thin.
     """
     eval_res = eval_res or {}
     missing = [str(m) for m in (eval_res.get("missing_concepts") or []) if m]
@@ -423,13 +490,14 @@ def plan_followup(
         probe_type = "implementation"
 
     must_probe = {
-        "what_used": "what that tool is and what it did",
-        "how_built": "how they used it, step by step",
-        "why_simple": "why they picked it, in simple terms",
+        "what_used": "what they implemented with that tool, not a definition",
+        "how_built": "how they trained or built it, and which code they wrote",
+        "regularization": "what they did about overfitting, class imbalance, or bad validation",
+        "why_simple": "why they picked it and what the alternative would have broken",
         "missing_concept": missing[0] if missing else "a missing concept",
-        "failure_mode": "what went wrong and how they noticed",
-        "tradeoff": "why they picked that option",
-        "metric": "how they checked it was working",
+        "failure_mode": "what failed on unseen data and what they changed",
+        "tradeoff": "why they picked that option and what it cost",
+        "metric": "which metric they trusted and what a miss looked like",
         "implementation": "what they built and which part they wrote",
     }.get(probe_type, probe_type.replace("_", " "))
 
@@ -487,6 +555,9 @@ def plan_followup(
         "ladder_step": ladder_step,
         "asked_probes": asked,
         "asked_questions": [str(q) for q in (asked_questions or []) if q][-8:],
+        "last_answer": " ".join((candidate_answer or "").split())[:900],
+        "answer_hooks": [t for t in mentioned[:4] if t and _fold(t) != _fold(project)],
+        "thin_answer": thin_answer(candidate_answer),
     }
 
 
@@ -534,6 +605,10 @@ def is_quality_followup(text: str, spec: Optional[Dict[str, Any]] = None) -> boo
         grounded = True
     if not grounded:
         return False
+    last_answer = str(spec.get("last_answer") or spec.get("previous_answer_excerpt") or "").strip()
+    if last_answer and not spec.get("thin_answer") and not thin_answer(last_answer):
+        if not _follows_last_answer(clean, spec, last_answer):
+            return False
     asked = spec.get("asked_questions") or []
     needle = re.sub(r"[^a-z0-9 ]+", " ", lowered)
     for prev in asked:
@@ -549,6 +624,24 @@ def _content_tokens(text: str) -> list[str]:
         for t in re.findall(r"[A-Za-z][A-Za-z0-9+#./-]{2,}", text or "")
         if t.lower() not in STOPWORDS
     ]
+
+
+def _follows_last_answer(question: str, spec: Dict[str, Any], last_answer: str) -> bool:
+    """True when the question names something they actually just said."""
+    lowered = (question or "").lower()
+    hooks = [str(t) for t in (spec.get("answer_hooks") or spec.get("mentioned_terms") or []) if t]
+    anchor = str(spec.get("anchor_term") or "").strip()
+    if anchor and len(anchor) >= 3 and anchor.lower() in lowered:
+        return True
+    if any(term.lower() in lowered for term in hooks if len(term) >= 3):
+        return True
+    project = str(spec.get("project_name") or "").lower()
+    answer_tokens = [
+        t for t in _content_tokens(last_answer)
+        if len(t) >= 4 and t not in project and t not in {"project", "used", "using", "work", "working"}
+    ]
+    q_tokens = set(_content_tokens(question))
+    return any(t in q_tokens for t in answer_tokens)
 
 
 SKILL_PROJECT_LEAK = re.compile(

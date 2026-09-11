@@ -2,14 +2,14 @@
 Question Engine: Decision & Routing Layer for AI Technical Interviewer.
 
 Python owns the interview plan (stage, project, skill, probe ladder).
-Qwen writes live project follow-ups at BASIC technical depth. Skill questions are locked at CV upload.
+Qwen writes live project follow-ups at implementation depth. Skill questions are locked at CV upload.
 
   TEMPLATE  — policy seed (skills, skip, close). Skills and close stay scripted; skip may be phrased.
   GENERATE  — project follow-ups (Qwen writes the question from the last answer).
 
 Structured stages:
-  1. PROJECT_DEEP_DIVE: 2 questions per project
-  2. SKILLS_ASSESSMENT: 3 planned questions per skill
+  1. PROJECT_DEEP_DIVE: 4 questions per project
+  2. SKILLS_ASSESSMENT: OOPs, then DSA, then CV skills (3 planned questions each)
   3. CLOSING
 """
 
@@ -20,7 +20,7 @@ import re
 from interviewer.services.resume import is_resume_metadata_title
 from backend.role_sift import normalize_track, sift_skills_for_role
 from backend.intent_engine import detect_requested_topic
-from backend.followup_engine import plan_followup
+from backend.followup_engine import plan_followup, probe_from_answer, thin_answer
 
 
 STRONG_MATCH_THRESHOLD = 0.75
@@ -79,6 +79,21 @@ def _cv_project_name(raw: Any, projects: List[str] | None = None) -> str:
     return name
 
 
+def _interview_skills(candidate_dict: Dict[str, Any], plan: Dict[str, Any]) -> List[str]:
+    names = [str(s).strip() for s in (plan.get("skill_names") or []) if str(s).strip()]
+    if names:
+        return names
+    return [
+        str(s).strip()
+        for s in (
+            candidate_dict.get("skills")
+            or candidate_dict.get("skill_sift", {}).get("intersection")
+            or []
+        )
+        if str(s).strip()
+    ]
+
+
 def _format_probes(records: List[Dict[str, Any]]) -> List[str]:
     probes = []
     for record in records:
@@ -107,6 +122,7 @@ class QuestionDecision:
     followup_spec: Optional[Dict[str, Any]] = None
     skill_kind: Optional[str] = None  # "foundation" (OOP/DSA) | "cv"
     block_projects: Optional[List[str]] = None
+    scripted: bool = False  # topic-change / skill lines spoken as written
 
     @property
     def needs_llm(self) -> bool:
@@ -114,8 +130,10 @@ class QuestionDecision:
         return self.mode == "GENERATE"
 
     def wants_qwen_phrasing(self, intent: str = "") -> bool:
-        """Qwen phrases project follow-ups. Skill / repeat / wrap-up stay scripted."""
+        """Qwen phrases project follow-ups. Topic changes, skills, repeat, wrap-up stay scripted."""
         if intent == "REPEAT_REQUEST":
+            return False
+        if self.scripted:
             return False
         if self.mode == "GENERATE":
             return True
@@ -186,6 +204,28 @@ class QuestionEngine:
                 return False
         return True
 
+    def _scripted_ask(
+        self,
+        spoken: str,
+        *,
+        topic: str,
+        difficulty: int,
+        directive: str,
+    ) -> QuestionDecision:
+        """Close the last topic, name the next one, ask one question — spoken as written."""
+        return QuestionDecision(
+            mode="TEMPLATE",
+            seed_question=spoken,
+            seed_topic=topic,
+            similarity_score=1.0,
+            target_topic=topic,
+            target_difficulty=difficulty,
+            directive=directive,
+            probes=[],
+            spoken_question=spoken,
+            scripted=True,
+        )
+
     def _qwen_question(
         self,
         *,
@@ -226,11 +266,12 @@ class QuestionEngine:
         if not self._fresh_spoken(spoken, exclude_questions):
             alt = {
                 "what_used": "how_built",
-                "how_built": "why_simple",
-                "why_simple": "what_used",
+                "how_built": "regularization",
+                "regularization": "metric",
+                "why_simple": "metric",
                 "implementation": "how_built",
-                "tradeoff": "how_built",
-                "metric": "what_used",
+                "tradeoff": "regularization",
+                "metric": "regularization",
             }.get(focus, "how_built")
             spec = plan_followup(
                 candidate_answer,
@@ -284,7 +325,7 @@ class QuestionEngine:
         difficulty = max(1, min(3, int(raw_diff)))
         plan = interview_plan or candidate_dict.get("interview_plan") or {}
 
-        skills = candidate_dict.get("skills") or candidate_dict.get("skill_sift", {}).get("intersection") or []
+        skills = _interview_skills(candidate_dict, plan)
         projects = [
             p for p in (candidate_dict.get("projects") or [])
             if p and not is_resume_metadata_title(str(p))
@@ -327,35 +368,24 @@ class QuestionEngine:
                     f"Thanks {c_name}. Tell me about a real situation involving hiring, conflict, "
                     f"or stakeholder communication from your background."
                 )
-                directive = (
-                    f"Open with a behavioral STAR question about their background. "
-                    f"Use what they just said. Do not ask a coding question."
+                return self._scripted_ask(
+                    opener,
+                    topic="Introduction",
+                    difficulty=difficulty,
+                    directive="TRANSITION: Thank them for the intro, then ask one STAR question. No coding.",
                 )
-            else:
-                opener = (
-                    f"Thanks {c_name}. Let's start with {first_project} — what problem did it solve, "
-                    f"and which main tools or models did you use?"
-                )
-                directive = (
-                    f"Open on '{first_project}'. React to their intro. Ask ONE basic technical "
-                    f"question that names the project and a tool they used. Stay at simple terms."
-                )
-            return self._qwen_question(
-                candidate_answer=candidate_answer,
-                eval_res=eval_res,
-                candidate_dict=candidate_dict,
-                topic=first_project,
-                difficulty=1 if interview_style != "behavioral" else difficulty,
-                focus="what_used",
-                project_thread={},
-                project_name=first_project if interview_style != "behavioral" else "",
-                interview_style=interview_style,
-                llm_anchor=llm_anchor,
-                exclude_questions=exclude_questions,
-                seed_topic=f"Project: {first_project}",
-                target_topic=f"Project: {first_project}",
-                directive=directive,
-                spoken_override=opener,
+            opener = (
+                f"Thanks {c_name}. Let's start with your first project, {first_project}. "
+                f"What problem did it solve, and which main tools or models did you use?"
+            )
+            return self._scripted_ask(
+                opener,
+                topic=f"Project: {first_project}",
+                difficulty=1,
+                directive=(
+                    "TRANSITION: Close the intro in one short thanks, name the first project, "
+                    "then ask the planned ownership question. Do not skip the bridge."
+                ),
             )
 
         # ── 3. Explicit topic request ─────────────────────────────────────────
@@ -385,64 +415,9 @@ class QuestionEngine:
                 spoken_override=spoken,
             )
 
-        # ── 4. Skip / Don't Know — move on, never repeat the skipped question ─
-        if intent in ("UNKNOWN_OR_SKIP", "TOPIC_CHANGE") or eval_res.get("is_skip"):
-            target_diff = difficulty
-            ack = "No worries at all, let's pivot."
-            if stage in ("project_deep_dive", "technical"):
-                p_idx = fsm_state.get("current_project_index", 0)
-                current_p = _cv_project_name(
-                    projects[p_idx] if p_idx < len(projects) else (projects[0] if projects else ""),
-                    projects,
-                )
-                alt_skill = skills[0] if skills else ""
-                spoken = (
-                    f"{ack} On {current_p}, what problem did you personally own, "
-                    f"and how did you know it was working?"
-                )
-                if alt_skill and p_idx > 0:
-                    spoken = (
-                        f"{ack} Have you worked with {alt_skill} in a real system — "
-                        f"what did you use it for, and what broke when it didn't go as planned?"
-                    )
-                if not self._fresh_spoken(spoken, exclude_questions):
-                    spoken = (
-                        f"{ack} Different angle on {current_p}: what would you change if you rebuilt it?"
-                    )
-                return QuestionDecision(
-                    mode="TEMPLATE",
-                    seed_question=spoken,
-                    seed_topic=current_p,
-                    similarity_score=0.0,
-                    target_topic=f"Project: {current_p}",
-                    target_difficulty=target_diff,
-                    directive="Acknowledge the skip without penalty, then phrase a new question on the next topic. Do not scold them.",
-                    probes=[],
-                    spoken_question=spoken,
-                )
-
-            s_idx = fsm_state.get("current_skill_index", 0)
-            current_s = skills[s_idx] if s_idx < len(skills) else (skills[0] if skills else "another skill on your resume")
-            next_s = skills[s_idx + 1] if s_idx + 1 < len(skills) else current_s
-            spoken = (
-                f"{ack} Have you worked with {next_s}? How did you use it in a real system, "
-                f"and what broke when it didn't go as planned?"
-            )
-            if not self._fresh_spoken(spoken, exclude_questions):
-                spoken = (
-                    f"{ack} Different angle on {current_s}: when would you choose not to use it?"
-                )
-            return QuestionDecision(
-                mode="TEMPLATE",
-                seed_question=spoken,
-                seed_topic=current_s,
-                similarity_score=0.0,
-                target_topic=f"Skill: {current_s}",
-                target_difficulty=target_diff,
-                directive="Acknowledge the skip without penalty and ask a new practical question.",
-                probes=[],
-                spoken_question=spoken,
-            )
+        # ── 4. Skip / Don't Know — stay on the current project or skill quota ─
+        # A skip spends one question. It must not jump past OOPs or DSA.
+        # Fall through so the next planned project probe or locked skill question is asked.
 
         # ── 5. Phase 1: Project Deep-Dive ─────────────────────────────────────
         if stage in ("project_deep_dive", "technical"):
@@ -455,50 +430,51 @@ class QuestionEngine:
                 current_project = _cv_project_name(projects[p_idx], projects)
             p_q_count = fsm_state.get("project_question_count", 0)
             thread = fsm_state.get("project_thread") or {}
-            if interview_style != "behavioral":
-                difficulty = 1
+            per_project = max(1, int(plan.get("questions_per_project") or 4))
+            skipped = bool(intent in ("UNKNOWN_OR_SKIP", "TOPIC_CHANGE") or eval_res.get("is_skip"))
+            if interview_style != "behavioral" and p_q_count > 0:
+                difficulty = max(2, min(3, difficulty))
 
             if p_q_count == 0:
                 if p_idx > 0:
                     prev_project = _cv_project_name(projects[p_idx - 1], projects)
+                    ordinal = "second" if p_idx == 1 else "next"
                     opener = (
-                        f"Thanks for walking through {prev_project}. Let's look at {current_project} — "
-                        f"what problem did it solve, and which main tools or models did you use?"
+                        f"Thanks, that covers {prev_project}. Let's move to your {ordinal} project, "
+                        f"{current_project}. What problem did it solve, and which main tools or models did you use?"
+                    )
+                    directive = (
+                        f"TRANSITION: Close '{prev_project}' in one sentence, name '{current_project}', "
+                        f"then ask the opening question. Do not mix the two projects."
                     )
                 else:
                     opener = (
-                        f"Let's start with {current_project}. What problem did it solve, "
-                        f"and which main tools or models did you use?"
+                        f"Let's start with your first project, {current_project}. "
+                        f"What problem did it solve, and which main tools or models did you use?"
                     )
-                return self._qwen_question(
-                    candidate_answer=candidate_answer,
-                    eval_res=eval_res,
-                    candidate_dict=candidate_dict,
-                    topic=current_project,
+                    directive = (
+                        f"TRANSITION: Name '{current_project}' as the first project, then ask the opening question."
+                    )
+                return self._scripted_ask(
+                    opener,
+                    topic=f"Project: {current_project}",
                     difficulty=difficulty,
-                    focus="what_used",
-                    project_thread={},
-                    project_name=current_project,
-                    interview_style=interview_style,
-                    llm_anchor=llm_anchor,
-                    exclude_questions=exclude_questions,
-                    seed_topic=f"Project: {current_project}",
-                    target_topic=f"Project: {current_project}",
-                    directive=(
-                        f"Open '{current_project}'. Use their last answer. Ask ONE basic technical "
-                        f"question that names the project. Stay at simple terms. Do not reuse a bank question."
-                    ),
-                    spoken_override=opener,
+                    directive=directive,
                 )
 
-            if p_q_count >= 2:
-                focus = "why_simple"
-            elif p_q_count >= 1:
-                focus = "how_built"
+            asked_probes = list(thread.get("asked_probes") or [])
+            if skipped or thin_answer(candidate_answer):
+                focus = probe_from_answer("", asked_probes)
             else:
-                focus = "what_used"
+                focus = probe_from_answer(candidate_answer, asked_probes)
             prior = thread.get("last_probe") or "the opener"
             prior_anchor = thread.get("last_anchor") or current_project
+            q_num = min(p_q_count + 1, per_project)
+            skip_note = (
+                "They skipped or did not know the last question. Do not scold them. "
+                if skipped
+                else ""
+            )
             return self._qwen_question(
                 candidate_answer=candidate_answer,
                 eval_res=eval_res,
@@ -514,10 +490,14 @@ class QuestionEngine:
                 seed_topic=f"Project: {current_project}",
                 target_topic=f"Project: {current_project}",
                 directive=(
-                    f"FOLLOW-UP: Stay on '{current_project}'. Last probe was '{prior}' on '{prior_anchor}'. "
-                    f"Write ONE basic technical question from what they just said. "
-                    f"Ask what a tool is, how they used it, or why they picked it. "
-                    f"Do not go deeper. Do not invent libraries."
+                    f"FOLLOW-UP: This is question {q_num} of {per_project} on '{current_project}'. "
+                    f"Stay on this project until all {per_project} questions are done. "
+                    f"Do not switch to another project, OOPs, or DSA. "
+                    f"Last probe was '{prior}' on '{prior_anchor}'. "
+                    f"{skip_note}"
+                    f"Write ONE question that follows a specific claim in their last answer. "
+                    f"Name what they said, then go deeper on that same claim. "
+                    f"Do not ask about a technique they never mentioned. Do not ask a dictionary definition."
                 ),
             )
 
@@ -557,16 +537,34 @@ class QuestionEngine:
                 f"Explain a concrete {current_skill} failure you have seen, "
                 f"including the data structure or API involved."
             )
+            skipped = bool(intent in ("UNKNOWN_OR_SKIP", "TOPIC_CHANGE") or eval_res.get("is_skip"))
 
             if s_q_count == 0:
                 if s_idx == 0:
-                    prefix = "Let's shift from projects to fundamentals. "
-                    if slot_kind != "foundation":
-                        prefix = f"Let's shift from projects to {current_skill}. "
+                    if slot_kind == "foundation":
+                        prefix = (
+                            "Thanks for walking through your projects. "
+                            "Let's move to fundamentals, starting with Object-Oriented Programming. "
+                        )
+                    else:
+                        prefix = (
+                            f"Thanks for walking through your projects. Let's move to {current_skill}. "
+                        )
+                elif slot_kind == "foundation":
+                    prefix = f"Good. Next, {current_skill}. "
                 else:
-                    prefix = f"Next, {current_skill}. "
+                    prev = str(skills[s_idx - 1] if s_idx else "")
+                    if any(
+                        token in prev.lower()
+                        for token in ("object-oriented", "data structure", "algorithm", "dsa")
+                    ):
+                        prefix = f"We've covered the fundamentals. Next, {current_skill}. "
+                    else:
+                        prefix = f"Next, {current_skill}. "
             else:
                 prefix = ""
+            if skipped:
+                prefix = f"No worries. {prefix}"
             spoken = f"{prefix}{planned_q}".strip()
             return QuestionDecision(
                 mode="TEMPLATE",
@@ -576,10 +574,9 @@ class QuestionEngine:
                 target_topic=f"Skill: {current_skill}",
                 target_difficulty=difficulty,
                 directive=(
-                    f"SPEAK planned {current_skill} question {q_idx + 1}/{max(1, len(planned))}. "
-                    f"This is a skill question, not a project follow-up. "
-                    f"Do not mention resume projects or reuse the last project answer. "
-                    f"Keep the planned {current_skill} ask."
+                    f"TRANSITION then SPEAK planned {current_skill} question {q_idx + 1}/{max(1, len(planned))}. "
+                    f"If this is a new topic, close the previous one first. "
+                    f"This is a skill question, not a project follow-up."
                 ),
                 probes=[],
                 selected_question=None,
@@ -591,6 +588,7 @@ class QuestionEngine:
                     ) else "cv"
                 ),
                 block_projects=projects[:6],
+                scripted=True,
             )
 
         # ── 7. Closing ────────────────────────────────────────────────────────
