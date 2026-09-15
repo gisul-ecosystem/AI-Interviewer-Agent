@@ -889,13 +889,31 @@ async def _phrase_with_qwen(q_decision, intent: str, fallback: str, llm_payload:
 _SENTENCE_SPLIT = re.compile(r"(?<=[.?!])\s+")
 
 
+def _spoken_sentences(text: str) -> list[str]:
+    return [part.strip() for part in _SENTENCE_SPLIT.split((text or "").strip()) if part.strip()]
+
+
+def _closed_question_prefix(text: str) -> str:
+    """Return finished sentences (through the last .?!) so Kokoro can start mid-stream."""
+    clean = (text or "").strip()
+    if not clean:
+        return ""
+    if clean[-1] in ".?!":
+        return clean
+    parts = _SENTENCE_SPLIT.split(clean)
+    if len(parts) < 2:
+        return ""
+    return " ".join(parts[:-1]).strip()
+
+
 async def _iter_phrased_sentences(q_decision, intent: str, fallback: str, llm_payload: dict | None):
     """
-    Yield the spoken question in TTS-sized sentences.
+    Yield TTS-sized sentences as soon as a gated question is complete.
 
-    Qwen only phrases the question policy already chose. The whole reply is
-    buffered and passed through the quality gate before anything is spoken:
-    streaming a first clause let ungated, off-topic wording reach Kokoro.
+    Qwen tokens stream in; the first sentence is sent to Kokoro when it ends
+    in .?! *and* passes the same quality gate as the final question. Ungated
+    clauses are never spoken. If the stream never passes the gate, the
+    planned fallback is spoken instead.
     """
     if not getattr(q_decision, "wants_qwen_phrasing", lambda _intent: False)(intent) or not llm_payload:
         if fallback:
@@ -916,6 +934,23 @@ async def _iter_phrased_sentences(q_decision, intent: str, fallback: str, llm_pa
             yield fallback
         return
 
+    emitted: list[str] = []
+    fallback_text = (fallback or "").strip()
+
+    def take_gated_sentences(raw: str) -> list[str]:
+        phrased = clean_interviewer_speech(raw).strip()
+        if not phrased:
+            return []
+        gated = finalize_spoken_question(phrased, q_decision, fallback_text)
+        if not gated or gated.strip() == fallback_text:
+            return []
+        fresh = []
+        for sentence in _spoken_sentences(gated):
+            if sentence and sentence not in emitted:
+                emitted.append(sentence)
+                fresh.append(sentence)
+        return fresh
+
     buf = ""
     try:
         async with asyncio.timeout(3.5):
@@ -928,17 +963,27 @@ async def _iter_phrased_sentences(q_decision, intent: str, fallback: str, llm_pa
                     deadline_ms=3200,
                 )
             ):
-                if delta:
-                    buf += delta
+                if not delta:
+                    continue
+                buf += delta
+                closed = _closed_question_prefix(clean_interviewer_speech(buf))
+                if not closed:
+                    continue
+                for sentence in take_gated_sentences(closed):
+                    yield sentence
     except Exception as exc:
         print(f"[Phrasing stream] {exc}")
 
+    if emitted:
+        for sentence in take_gated_sentences(buf):
+            yield sentence
+        return
+
     phrased = clean_interviewer_speech(buf).strip()
-    final = finalize_spoken_question(phrased, q_decision, fallback) if phrased else (fallback or "")
-    for sentence in _SENTENCE_SPLIT.split(final):
-        text = sentence.strip()
-        if text:
-            yield text
+    final = finalize_spoken_question(phrased, q_decision, fallback_text) if phrased else fallback_text
+    for sentence in _spoken_sentences(final) or ([final] if final else []):
+        if sentence:
+            yield sentence
 
 
 def _make_session(features: dict, role_override: str | None = None, raw_resume_text: str | None = None, job_description: str | None = None) -> dict:
@@ -2237,10 +2282,7 @@ async def _whisper_live_interview(client_ws: WebSocket, mode: str, session_id: O
                     stream.reset()
                     await client_ws.send_json({"type": "reset_ack"})
                 elif action == "preview":
-                    try:
-                        await stream.transcribe_full()
-                    except Exception as exc:
-                        print(f"[Whisper STT] preview error: {exc}")
+                    continue
                 elif action == "flush":
                     try:
                         raw = await stream.transcribe_full(reuse_if_unchanged=True)

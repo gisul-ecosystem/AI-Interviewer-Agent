@@ -104,9 +104,8 @@ class LiveKitInterviewAgent:
             self._stop.set()
 
         await room.connect(creds["url"], creds["token"])
-        self._source = rtc.AudioSource(TTS_RATE, 1, queue_size_ms=8000)
-        out_track = rtc.LocalAudioTrack.create_audio_track("kokoro", self._source)
-        await room.local_participant.publish_track(out_track)
+        # Do not publish Kokoro here — the tab plays /api/tts. A room audio
+        # track would autoplay in the browser and leak into Whisper.
         self._ready.set()
         await self._send({"type": "agent_ready", "session_id": self.session_id})
         logger.info("AI interviewer joined %s", creds["room"])
@@ -156,9 +155,15 @@ class LiveKitInterviewAgent:
 
     async def speak(self, text: str, voice: str) -> None:
         text = (text or "").strip()
-        if not text or not self._source:
+        if not text:
             raise RuntimeError("AI interviewer is not in the room")
         async with self._speak_lock:
+            if not self._source:
+                if not self.room:
+                    raise RuntimeError("AI interviewer is not in the room")
+                self._source = rtc.AudioSource(TTS_RATE, 1, queue_size_ms=8000)
+                out_track = rtc.LocalAudioTrack.create_audio_track("kokoro", self._source)
+                await self.room.local_participant.publish_track(out_track)
             wav = await _fetch_kokoro_wav(text, voice)
             pcm = _wav_to_mono_pcm16(wav, TTS_RATE)
             if len(pcm) < 64:

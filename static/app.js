@@ -54,7 +54,6 @@ let ttsGeneration = 0;
 let silenceTimer = null;
 let lastTranscriptSnapshot = '';
 const SILENCE_THRESHOLD_MS = 2800;
-const STT_PREVIEW_MS = 1000;
 const MIC_QUIET_MS = 3500;
 const MIN_AUTO_SUBMIT_WORDS = 5;
 const VOICE_RMS_THRESHOLD = 0.012;
@@ -63,7 +62,6 @@ let questionStreamOpen = false;
 let lastMicVoiceAt = 0;
 let listenOpenedAt = 0;
 let pendingFinalTranscript = null;
-let sttPreviewSent = false;
 let didSpeakChunk = false;
 const VOICE_CMD_RE = /\b(pass|skip|idk|dunno|repeat|pardon|don'?t know|dont know|not sure|next question|didn'?t hear|can you repeat|could you repeat)\b/i;
 function isVoiceCommand(text) {
@@ -82,7 +80,14 @@ let candidateHasSpokenInTurn = false;
 let isEchoCooldown = false;
 let shouldClearTranscriptOnNextSpeech = false;
 let turnPhase = 'idle'; // idle | ai_speaking | cooldown | listening | processing
+const STT_MAX_RECONNECTS = 5;
+const STT_RECONNECT_STABLE_MS = 2500;
 let sttReconnectAttempts = 0;
+let sttSocketGen = 0;
+let sttReconnectTimer = null;
+let sttStableTimer = null;
+let sttUserStopped = false;
+let sttHasOpened = false;
 let currentVoice = 'af_heart'; // Kokoro TTS voice model (e.g. af_heart, af_bella, am_adam, bf_emma)
 
 // Rolling PCM16 / Float32 resample buffer & state
@@ -109,8 +114,7 @@ let noiseFloor = 0.005;
 let bargeInFrames = 0;
 let currentAudioUrl = null;
 
-// The server drops audio while it reconnects the upstream STT socket, so hold
-// the gate shut until it acknowledges. Buffered audio is flushed after.
+// Mic gate stays shut until the caption socket acks a buffer reset.
 let sttReady = true;
 let sttResetSafetyTimer = null;
 
@@ -206,6 +210,153 @@ function liveInterviewWsUrl() {
   const params = new URLSearchParams({ mode: currentMode });
   if (activeInterviewSessionId) params.set('session_id', activeInterviewSessionId);
   return `${protocol}//${window.location.host}/ws/live-interview?${params.toString()}`;
+}
+
+function clearSttReconnectTimers() {
+  if (sttReconnectTimer) {
+    clearTimeout(sttReconnectTimer);
+    sttReconnectTimer = null;
+  }
+  if (sttStableTimer) {
+    clearTimeout(sttStableTimer);
+    sttStableTimer = null;
+  }
+}
+
+function detachSttSocket(socket) {
+  if (!socket) return;
+  try {
+    socket.onopen = null;
+    socket.onmessage = null;
+    socket.onerror = null;
+    socket.onclose = null;
+  } catch (_) { }
+}
+
+function closeSttSocket({ userStop = false } = {}) {
+  if (userStop) sttUserStopped = true;
+  clearSttReconnectTimers();
+  sttSocketGen += 1;
+  const socket = ws;
+  ws = null;
+  detachSttSocket(socket);
+  if (!socket) return;
+  try {
+    if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+      socket.close();
+    }
+  } catch (_) { }
+}
+
+function attachSttSocket(socket, { isReconnect = false } = {}) {
+  const gen = ++sttSocketGen;
+  ws = socket;
+  socket.binaryType = 'arraybuffer';
+
+  socket.onopen = () => {
+    if (gen !== sttSocketGen || ws !== socket) return;
+    sttReady = true;
+    console.log(`[WS Connected] Native SR: ${audioContext ? audioContext.sampleRate : '?'}Hz → 16000Hz`);
+    const firstOpen = !sttHasOpened;
+    sttHasOpened = true;
+    if (!firstOpen) {
+      if (turnPhase === 'listening') setStatus('listening', 'Captions restored');
+      sttStableTimer = setTimeout(() => {
+        sttStableTimer = null;
+        if (gen === sttSocketGen && ws === socket && socket.readyState === WebSocket.OPEN) {
+          sttReconnectAttempts = 0;
+        }
+      }, STT_RECONNECT_STABLE_MS);
+      return;
+    }
+    sttReconnectAttempts = 0;
+    resetPreroll();
+    toggleMicBtn.classList.add('recording');
+    micBtnText.innerText = 'Stop Interview';
+    if (generateQuestionBtn) generateQuestionBtn.disabled = true;
+    setStatus('listening', currentMode === 'interview' ? 'Interview starting…' : 'Listening (Live ASR)');
+    visualizerOverlay.classList.add('hidden');
+    startTimer();
+
+    if (currentMode === 'interview' && !greetingPlayed) {
+      greetingPlayed = true;
+      const greeting = openingGreeting || 'Hi, I am your interviewer. Please introduce yourself and the work you are proudest of.';
+      setStatus('speaking', 'AI Greeting...');
+      emptyAiResponse.style.display = 'none';
+      aiBubble.style.display = 'flex';
+      aiText.innerText = greeting;
+      typingCursor.style.display = 'none';
+      if (voiceSynthesisToggle.checked) {
+        setTurnPhase('ai_speaking');
+        speakText(greeting);
+      } else {
+        setTurnPhase('ai_speaking');
+        setTimeout(() => onAiFinishedSpeaking(true), 1600);
+      }
+    } else {
+      setTurnPhase('listening');
+      startSilencePolling();
+    }
+  };
+
+  socket.onmessage = (event) => {
+    if (gen !== sttSocketGen || ws !== socket) return;
+    try {
+      handleSttSocketMessage(JSON.parse(event.data));
+    } catch (err) {
+      console.error('[WS] Message parse error:', err);
+    }
+  };
+
+  socket.onerror = (err) => {
+    if (gen !== sttSocketGen || ws !== socket) return;
+    console.error('[WS] Error:', err);
+  };
+
+  socket.onclose = () => {
+    if (gen !== sttSocketGen) return;
+    if (ws === socket) ws = null;
+    if (sttUserStopped || !isRecording || interviewEnded) return;
+    scheduleSttReconnect();
+  };
+}
+
+function openSttSocket({ isReconnect = false } = {}) {
+  const previous = ws;
+  ws = null;
+  detachSttSocket(previous);
+  sttSocketGen += 1;
+  if (previous) {
+    try {
+      if (previous.readyState === WebSocket.OPEN || previous.readyState === WebSocket.CONNECTING) {
+        previous.close();
+      }
+    } catch (_) { }
+  }
+  const socket = new WebSocket(liveInterviewWsUrl());
+  attachSttSocket(socket, { isReconnect });
+}
+
+function scheduleSttReconnect() {
+  if (sttUserStopped || !isRecording || interviewEnded) return;
+  if (sttReconnectTimer) return;
+  if (sttReconnectAttempts >= STT_MAX_RECONNECTS) {
+    setStatus('error', 'Captions dropped — stop and start the interview');
+    return;
+  }
+  const wait = Math.min(8000, 700 * Math.pow(2, sttReconnectAttempts));
+  sttReconnectAttempts += 1;
+  setStatus('error', `Caption link dropped — retrying in ${(wait / 1000).toFixed(1)}s`);
+  sttReconnectTimer = setTimeout(() => {
+    sttReconnectTimer = null;
+    if (sttUserStopped || !isRecording || interviewEnded) return;
+    try {
+      openSttSocket({ isReconnect: true });
+    } catch (err) {
+      console.error('[WS] Reconnect open failed:', err);
+      scheduleSttReconnect();
+    }
+  }, wait);
 }
 
 function persistResumeToken(token) {
@@ -424,66 +575,14 @@ async function startRecording() {
     // 1. Capture microphone
     await initAudioCapture();
 
+    sttUserStopped = false;
+    sttHasOpened = false;
+    sttReconnectAttempts = 0;
+    isRecording = true;
+    toggleMicBtn.classList.add('recording');
+    micBtnText.innerText = 'Stop Interview';
     setStatus('listening', 'Connecting to STT...');
-
-    // 2. Open WebSocket
-    const wsUrl = liveInterviewWsUrl();
-    ws = new WebSocket(wsUrl);
-    ws.binaryType = 'arraybuffer';
-
-    let hasError = false;
-
-    ws.onopen = () => {
-      console.log(`[WS Connected] Native SR: ${audioContext.sampleRate}Hz → 16000Hz (Smooth Phase-Preserved Resample)`);
-      isRecording = true;
-      sttReady = true;
-      resetPreroll();
-      toggleMicBtn.classList.add('recording');
-      micBtnText.innerText = 'Stop Interview';
-      if (generateQuestionBtn) generateQuestionBtn.disabled = true;
-      setStatus('listening', currentMode === 'interview' ? 'Interview starting…' : 'Listening (Live ASR)');
-      visualizerOverlay.classList.add('hidden');
-      startTimer();
-
-      // Auto-greeting: ask candidate for intro when interview starts
-      if (currentMode === 'interview' && !greetingPlayed) {
-        greetingPlayed = true;
-        const greeting = openingGreeting || 'Hi, I am your interviewer. Please introduce yourself and the work you are proudest of.';
-        setStatus('speaking', 'AI Greeting...');
-        emptyAiResponse.style.display = 'none';
-        aiBubble.style.display = 'flex';
-        aiText.innerText = greeting;
-        typingCursor.style.display = 'none';
-        if (voiceSynthesisToggle.checked) {
-          setTurnPhase('ai_speaking');
-          speakText(greeting);
-        } else {
-          setTurnPhase('ai_speaking');
-          setTimeout(() => onAiFinishedSpeaking(true), 1600);
-        }
-      } else {
-        setTurnPhase('listening');
-        startSilencePolling();
-      }
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        handleSttSocketMessage(JSON.parse(event.data));
-      } catch (err) {
-        console.error('[WS] Message parse error:', err);
-      }
-    };
-
-    ws.onerror = (err) => {
-      console.error('[WS] Error:', err);
-      setStatus('error', 'Caption link dropped — reconnecting');
-    };
-
-    ws.onclose = () => {
-      if (!isRecording || interviewEnded) return;
-      scheduleSttReconnect();
-    };
+    openSttSocket({ isReconnect: false });
 
   } catch (err) {
     console.error('[Recording] Start failed:', err);
@@ -535,7 +634,7 @@ function handleSttSocketMessage(data) {
   }
   if (data.type === 'error') {
     console.error('[STT Error]', data.message);
-    setStatus('error', 'Captions glitched — keep speaking, reconnecting');
+    setStatus('error', data.message || 'Captions delayed — keep speaking');
     return;
   }
   if (data.type !== 'transcript') return;
@@ -573,51 +672,19 @@ function setTranscriptPlaceholder(message) {
   wordCount.innerText = '0 words';
 }
 
-/** Recycle the upstream STT stream and keep the mic gate shut until it is back. */
+/** Clear leftover PCM so the next flush is this answer only. Turn phase already mutes the mic. */
 function sendSttReset() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   try {
     ws.send(JSON.stringify({ action: 'reset' }));
-    sttReady = false;
-    if (sttResetSafetyTimer) clearTimeout(sttResetSafetyTimer);
-    // Never deadlock the mic if the ack is lost.
-    sttResetSafetyTimer = setTimeout(() => {
-      if (!sttReady) {
-        console.warn('[STT Relay] reset_ack missing after 2s; reopening mic gate.');
-        sttReady = true;
-      }
-    }, 2000);
+    sttReady = true;
+    if (sttResetSafetyTimer) {
+      clearTimeout(sttResetSafetyTimer);
+      sttResetSafetyTimer = null;
+    }
   } catch (_) {
     sttReady = true;
   }
-}
-
-function scheduleSttReconnect() {
-  if (!isRecording || interviewEnded) return;
-  const wait = Math.min(8000, 700 * Math.pow(2, sttReconnectAttempts++));
-  setTimeout(() => {
-    if (!isRecording || interviewEnded) return;
-    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-    const wsUrl = liveInterviewWsUrl();
-    try {
-      ws = new WebSocket(wsUrl);
-      ws.binaryType = 'arraybuffer';
-      ws.onopen = () => {
-        sttReconnectAttempts = 0;
-        sttReady = true;
-        setStatus('listening', turnPhase === 'listening' ? 'Captions restored' : statusText.innerText);
-      };
-      ws.onmessage = (event) => {
-        try {
-          handleSttSocketMessage(JSON.parse(event.data));
-        } catch (_) { }
-      };
-      ws.onerror = () => setStatus('error', 'Caption reconnect failed');
-      ws.onclose = () => { if (isRecording && !interviewEnded) scheduleSttReconnect(); };
-    } catch (_) {
-      scheduleSttReconnect();
-    }
-  }, wait);
 }
 
 function resetPreroll() {
@@ -795,16 +862,7 @@ async function connectLiveKitMic() {
         const remote = document.getElementById('remoteVideo');
         if (remote) track.attach(remote);
       }
-      if (track.kind === 'audio' && String(participant?.identity || '').startsWith('ai-interviewer')) {
-        const host = document.getElementById('aiLivekitAudioHost');
-        const el = track.attach();
-        el.autoplay = true;
-        el.setAttribute('playsinline', 'true');
-        if (host) {
-          host.innerHTML = '';
-          host.appendChild(el);
-        }
-      }
+      // Kokoro plays in the tab. Do not autoplay LiveKit AI audio into the mic.
     };
 
     room.on(LK.RoomEvent.ParticipantConnected, markAgent);
@@ -920,18 +978,11 @@ async function initAudioCapture() {
       return;
     }
 
-    // Drop the click / TTS echo that lands in the first half-second of a turn.
-    if (listenOpenedAt && Date.now() - listenOpenedAt < 500) {
-      resetPreroll();
-      return;
-    }
-
     let energy = 0;
     for (let i = 0; i < resampled.length; i += 8) energy += resampled[i] * resampled[i];
     const rms = Math.sqrt(energy / Math.max(1, resampled.length / 8));
     if (rms >= VOICE_RMS_THRESHOLD) {
       lastMicVoiceAt = Date.now();
-      sttPreviewSent = false;
       if (turnPhase === 'listening') {
         candidateHasSpokenInTurn = true;
         if (generateQuestionBtn && currentMode === 'interview') generateQuestionBtn.disabled = false;
@@ -1010,7 +1061,10 @@ function float32ToPCM16(float32) {
 // ─── Stop Recording ───────────────────────────────────────────────────────────
 
 function stopRecording(preserveStatus = false) {
+  sttUserStopped = true;
+  sttHasOpened = false;
   isRecording = false;
+  clearSttReconnectTimers();
   clearSilenceTimer();
   toggleMicBtn.classList.remove('recording');
   micBtnText.innerText = 'Start Interview';
@@ -1045,15 +1099,10 @@ function stopRecording(preserveStatus = false) {
     try { audioContext.close(); } catch (_) { }
     audioContext = null;
   }
-  if (ws) {
-    if (ws.readyState === WebSocket.OPEN) {
-      try { ws.send(JSON.stringify({ action: 'flush' })); } catch (_) { }
-      setTimeout(() => { try { ws.close(); } catch (_) { } ws = null; }, 400);
-    } else {
-      try { ws.close(); } catch (_) { }
-      ws = null;
-    }
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    try { ws.send(JSON.stringify({ action: 'flush' })); } catch (_) { }
   }
+  closeSttSocket({ userStop: true });
   if (animationFrameId) {
     cancelAnimationFrame(animationFrameId);
     animationFrameId = null;
@@ -1287,16 +1336,6 @@ function startSilencePolling() {
     const now = Date.now();
     if (!lastMicVoiceAt) return;
     const micQuietMs = now - lastMicVoiceAt;
-    if (
-      micQuietMs >= STT_PREVIEW_MS
-      && !sttPreviewSent
-      && ws
-      && ws.readyState === WebSocket.OPEN
-    ) {
-      sttPreviewSent = true;
-      flushPendingPcm();
-      try { ws.send(JSON.stringify({ action: 'preview' })); } catch (_) { }
-    }
     if (micQuietMs < SILENCE_THRESHOLD_MS) return;
 
     console.log(`[Silence Trigger] Candidate finished speaking (mic quiet ${micQuietMs}ms)`);
@@ -1580,7 +1619,6 @@ function onAiFinishedSpeaking(force = false) {
     lastTranscriptChangeTime = Date.now();
     lastMicVoiceAt = 0;
     listenOpenedAt = Date.now();
-    sttPreviewSent = false;
     if (isRecording) {
       if (generateQuestionBtn) generateQuestionBtn.disabled = false;
       setStatus('listening', 'Your turn — pause when finished; next question is automatic');

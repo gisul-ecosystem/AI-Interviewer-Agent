@@ -94,7 +94,7 @@ class SpeechSettings:
     # whisper_api = Groq Whisper large-v3-turbo. whisper = local faster-whisper.
     # Nemotron / FastConformer is not used and is ignored if set.
     stt_provider: str = field(default_factory=lambda: _env("STT_PROVIDER", "whisper_api"))
-    stt_model: str = field(default_factory=lambda: _env("STT_WHISPER_MODEL", "whisper-large-v3-turbo"))
+    stt_model: str = field(default_factory=lambda: _env("STT_WHISPER_MODEL", "whisper-large-v3"))
     stt_device: str = field(default_factory=lambda: _env("STT_DEVICE", "auto"))
     stt_language: str = field(default_factory=lambda: _env("STT_LANGUAGE", "en"))
     stt_api_key: str = field(default_factory=lambda: _env("STT_API_KEY", _env("GROQ_API_KEY", "")))
