@@ -133,7 +133,7 @@ def test_modular_pipeline():
     assert intent5 == "REPEAT_REQUEST"
     assert "How did you handle overfitting" in dec5.seed_question
 
-    # 7. Test Explicit Topic Switch: Candidate says "Can you change after that? Can we switch to Java?"
+    # 7. Explicit topic switch must not hijack the agenda.
     ans6 = "Can you change after that? Can we switch to Java?"
     intent6 = detect_candidate_intent(ans6)
     eval6 = evaluate_turn_answer(ans6, {}, intent6, [])
@@ -148,23 +148,23 @@ def test_modular_pipeline():
         question_bank_rag=question_bank_rag
     )
     print(f"\n[Turn 6 Candidate requests 'Java'] Target Topic: {dec6.target_topic}, Directive: {dec6.directive[:65]}...")
-    assert dec6.target_topic == "Java"
-    assert "project" not in dec6.target_topic.lower()
-    assert dec6.mode == "GENERATE"
-    if dec6.selected_question:
-        assert "expected_concepts" in dec6.selected_question
+    assert intent6 == "TOPIC_CHANGE"
+    assert "java" not in (dec6.target_topic or "").lower()
+    assert "let's switch to" not in (dec6.spoken_question or "").lower()
+    assert dec6.mode in ("TEMPLATE", "GENERATE")
 
-    # 8. Test Correctness & Adaptive Difficulty Increase on Strong Technical Answer
-    # Candidate answers accurately based on the question asked
-    bank_q = (dec6.selected_question or {}).get("question") or ""
-    if "volatile" in bank_q.lower():
-        ans7 = "Volatile guarantees memory visibility across threads by bypassing CPU cache and using memory barriers, but it does not provide atomicity. Synchronized provides mutual exclusion locks so only one thread executes the critical section, preventing race conditions."
-        expected_jvm = dec6.selected_question.get("expected_concepts", [])
-    else:
-        ans7 = "In the JVM, Stack memory stores method stack frames and local variables, whereas Heap memory stores objects. StackOverflowError happens with deep or infinite recursion, while OutOfMemoryError occurs when the garbage collection cannot reclaim heap memory."
-        expected_jvm = (dec6.selected_question or {}).get("expected_concepts") or ["stack", "heap"]
+    # 8. Strong technical answer still raises difficulty inside [1, 3].
+    ans7 = (
+        "I used inheritance so a trainer and a serving adapter shared one interface, "
+        "and encapsulation hid the weights. Runtime polymorphism picked the right encoder."
+    )
     intent7 = detect_candidate_intent(ans7)
-    eval7 = evaluate_turn_answer(ans7, dec6.selected_question or {}, intent7, expected_concepts=expected_jvm)
+    eval7 = evaluate_turn_answer(
+        ans7,
+        {"expected_concepts": ["inheritance", "encapsulation", "polymorphism"]},
+        intent7,
+        expected_concepts=["inheritance", "encapsulation", "polymorphism"],
+    )
     initial_diff = s6["difficulty_level"]
     fsm7 = InterviewFSM(s6)
     s7 = fsm7.update_from_evaluation(eval7, intent7, candidate_dict=session["candidate"])
@@ -176,7 +176,7 @@ def test_modular_pipeline():
     else:
         assert s7["difficulty_level"] == 3
 
-    # 9. Test Explicit Topic Switch to OOP: "Can we do oops?"
+    # 9. "Can we do oops?" still spends the current quota instead of jumping.
     ans8 = "Can we change topic to oops?"
     intent8 = detect_candidate_intent(ans8)
     eval8 = evaluate_turn_answer(ans8, {}, intent8, [])
@@ -189,8 +189,8 @@ def test_modular_pipeline():
         question_bank_rag=question_bank_rag
     )
     print(f"[Turn 8 Candidate requests 'OOP'] Target Topic: {dec8.target_topic}, Probes: {len(dec8.probes)}")
-    assert "Object-Oriented Programming" in dec8.target_topic or "OOP" in dec8.target_topic
-    assert "project" not in dec8.target_topic.lower()
+    assert dec8.target_topic == s7.get("current_topic") or "Object-Oriented" in (dec8.target_topic or "")
+    assert "let's switch to" not in (dec8.spoken_question or "").lower()
 
     # 10. Test Prompt Builder with QuestionDecision
     prompt_payload = build_interviewer_prompt(

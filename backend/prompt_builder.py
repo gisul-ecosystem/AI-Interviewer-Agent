@@ -144,11 +144,14 @@ def build_interviewer_prompt(
         stay_on = f"Stay on '{project}' and say that name.\n" if project else f"Stay on {target_topic}.\n"
         prev_probe = spec.get("previous_probe") or ""
         prev_anchor = spec.get("previous_anchor") or ""
-        last_excerpt = spec.get("previous_answer_excerpt") or ""
+        last_excerpt = spec.get("previous_answer") or spec.get("previous_answer_excerpt") or ""
         q_num = spec.get("ladder_step") or 1
         probe = str(spec.get("probe_type") or "how_built")
         hooks = ", ".join(spec.get("answer_hooks") or []) or mentioned
-        last_full = (candidate_answer or spec.get("last_answer") or "")[:1200]
+        last_full = str(candidate_answer or spec.get("last_answer") or "").strip()
+        prior_full = str(last_excerpt or "").strip()
+        if prior_full and prior_full == last_full:
+            prior_full = ""
         probe_hint = {
             "what_used": "Backup only if the answer was thin: ask what they implemented with the named tool.",
             "how_built": "Backup only if the answer was thin: ask how they built the thing they just named.",
@@ -166,14 +169,20 @@ def build_interviewer_prompt(
                 "Name the project, then ask about something they just said.\n"
             )
         )
+        prior_block = (
+            f"PREVIOUS ANSWER ON THIS PROJECT (context only; follow the latest answer):\n\"\"\"{prior_full}\"\"\"\n"
+            if prior_full
+            else ""
+        )
         mode_instruction = (
             "MODE: GENERATE — WRITE THE NEXT INTERVIEW QUESTION FROM THEIR LAST ANSWER\n"
             "You are live. The candidate just answered. Your only job is to follow that answer.\n"
             f"CV CONTEXT FOR THIS PROJECT (facts only; never turn another title into this project):\n"
             f"\"\"\"{project_resume_context[:1200] or '(no additional CV context)'}\"\"\"\n"
-            f"THEIR LAST ANSWER (follow this):\n\"\"\"{last_full or '(thin or empty — use the fallback)'}\"\"\"\n"
+            f"{prior_block}"
+            f"THEIR LAST ANSWER (follow this — the full thing they just said):\n\"\"\"{last_full or '(thin or empty — use the fallback)'}\"\"\"\n"
             "Do this:\n"
-            "1. Pick ONE concrete claim they made (a tool, model, step, data problem, or number).\n"
+            "1. Read the full last answer. Pick ONE concrete claim they made (a tool, model, step, data problem, or number).\n"
             "2. Repeat that claim in a few words so they hear you were listening.\n"
             "3. Ask ONE deeper question about THAT claim — what they implemented, why, what failed, or how they checked it.\n"
             "4. Do not ask about a technique they never mentioned. No overfitting unless they talked about a model or training. "
@@ -182,10 +191,9 @@ def build_interviewer_prompt(
             "Do NOT jump to OOPs or DSA on this turn.\n"
             "If they skipped or said they don't know, do not scold them; ask a new question on the same project using the fallback.\n"
             f"{stay_on}{thread_line}"
-            f"Claims/terms they actually said: {hooks}\n"
-            f"Name this term if it appeared: {anchor}\n"
+            f"Backup terms if the answer is thin: {hooks}\n"
+            f"Backup name if it appeared: {anchor}\n"
             f"{probe_hint} ({probe})\n"
-            f"Previous answer excerpt: {last_excerpt or 'none'}\n"
             f"Fallback only if you cannot follow their words: {fallback}\n"
             f"{style_rule}\n"
             f"One question. 16-48 words. End with ?. Difficulty {target_diff}/3 on {target_topic}."
@@ -203,7 +211,7 @@ def build_interviewer_prompt(
         "- Use a noun they actually used (a library, model, metric, or project). Avoid \"that\", \"your approach\", \"tell me more\".\n"
         "- Sound like a technical interviewer who has read their answer, not a quiz card.\n"
         "- Use their name at most once, and only if it is natural.\n"
-        "- This is one thread. The next question should follow a claim in their last sentence, not restart."
+        "- This is one thread. The next question should follow a claim in their last answer, not restart."
     )
 
     agenda = (
@@ -271,7 +279,7 @@ POLICY: {decision_directive}
             "project": spec.get("project_name"),
             "probes_already_asked": spec.get("asked_probes") or [],
             "previous_anchor": spec.get("previous_anchor"),
-            "previous_answer_excerpt": spec.get("previous_answer_excerpt"),
+            "previous_answer": spec.get("previous_answer") or spec.get("previous_answer_excerpt"),
         },
         "DETECTED_INTENT": intent,
         "CANDIDATE_PROFILE": {

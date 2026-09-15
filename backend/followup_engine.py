@@ -459,6 +459,9 @@ def plan_followup(
     same_project = bool(thread.get("project")) and _fold(thread.get("project")) == _fold(project)
     asked = list(thread.get("asked_probes") or []) if same_project else []
     last_anchor = str(thread.get("last_anchor") or "") if same_project else ""
+    prior_answers = list(thread.get("recent_answers") or []) if same_project else []
+    full_answer = " ".join(str(candidate_answer or "").split())[:4000]
+    previous_full = str(prior_answers[-1] or "").strip() if prior_answers else ""
 
     mentioned = extract_mentioned_terms(
         candidate_answer,
@@ -526,7 +529,8 @@ def plan_followup(
         "last_anchor": anchor,
         "last_probe": probe_type,
         "asked_probes": asked + [probe_type],
-        "answer_excerpt": " ".join((candidate_answer or "").split()[:40]),
+        "last_answer": full_answer,
+        "recent_answers": ([a for a in prior_answers if a] + ([full_answer] if full_answer else []))[-2:],
     }
     previous_probe = str(thread.get("last_probe") or "") if same_project else ""
     ladder_step = len(asked) + 1
@@ -551,11 +555,12 @@ def plan_followup(
         "interview_style": interview_style,
         "previous_anchor": last_anchor,
         "previous_probe": previous_probe,
-        "previous_answer_excerpt": str(thread.get("answer_excerpt") or "") if same_project else "",
+        "previous_answer_excerpt": previous_full,
+        "previous_answer": previous_full,
         "ladder_step": ladder_step,
         "asked_probes": asked,
         "asked_questions": [str(q) for q in (asked_questions or []) if q][-8:],
-        "last_answer": " ".join((candidate_answer or "").split())[:900],
+        "last_answer": full_answer,
         "answer_hooks": [t for t in mentioned[:4] if t and _fold(t) != _fold(project)],
         "thin_answer": thin_answer(candidate_answer),
     }

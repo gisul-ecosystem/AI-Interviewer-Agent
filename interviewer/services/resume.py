@@ -750,36 +750,8 @@ def extract_projects(text: str, stated: Iterable[Any] | None = None) -> list[str
     if isinstance(stated, str):
         stated = [part.strip() for part in stated.split(",") if part.strip()]
     for item in stated or ():
-        # LLM-stated projects get trusted if:
-        # 1. The words appear in the source CV (evidence check)
-        # 2. It's not a skill/tool name
-        # 3. It doesn't look like a section heading or job line
-        # We skip the strict _is_project_name() heuristic — the LLM already parsed the structure.
-        raw = str(item or "").strip()
-        if not raw:
-            continue
-        raw_clean = _strip_project_prefix(raw).strip(" -\u2013\u2014|:\u2022*.,")
-        raw_clean = _PROJECT_SUFFIX_RE.sub("", raw_clean).strip().rstrip(".,:;")
-        if not raw_clean or len(raw_clean) < 2:
-            continue
-        if is_resume_metadata_title(raw_clean) or looks_like_job_line(raw_clean):
-            continue
-        if _is_skillish_title(raw_clean) or raw_clean.lower() in _tech_vocab_lower():
-            continue
-        if PROJECT_DESC_RE.match(raw_clean):
-            continue
-        if _DESCRIPTOR_ADJ_RE.match(raw_clean) or _METRIC_ID_RE.match(raw_clean):
-            continue
-        if re.match(r'^[A-Z]{1,4}$', raw_clean):  # pure abbreviation (ML, AI)
-            continue
-        # Require that the title's key words exist in the resume text.
-        if not has_source_evidence(raw_clean):
-            continue
-        key = raw_clean.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        found.append(raw_clean)
+        # LLM titles must still look like a project name and appear in the CV.
+        add(item, loose=True, require_evidence=True)
 
     sections = _collect_sections(text)
     for line in sections.get("projects") or ():
@@ -881,7 +853,7 @@ def extract_skills(text: str, stated: Iterable[Any] | None = None) -> list[str]:
         lowered = skill.lower()
         if lowered in INVALID_FIELD_WORDS:
             return
-        if any(word in lowered for word in INVALID_FIELD_WORDS if word not in ("dsa",)):
+        if any(re.search(rf"\b{re.escape(word)}\b", lowered) for word in INVALID_FIELD_WORDS if word not in ("dsa", "experience", "languages", "development", "page")):
             return
         if lowered in seen:
             return

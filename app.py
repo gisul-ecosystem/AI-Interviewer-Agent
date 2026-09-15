@@ -385,10 +385,23 @@ def parse_resume_heuristics(text: str) -> dict:
     return parse_resume(text or "")
 
 
-def extract_resume_features_llm(resume_text: str) -> dict:
-    """Hybrid extraction: Qwen identifies titles; deterministic code validates them."""
+def _parse_resume_llm_json(content: str) -> dict | None:
+    """Return a JSON object from the extract model, or None if it is not parseable."""
+    cleaned = re.sub(r"^```(?:json)?\s*", "", str(content or "").strip(), flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned).strip()
+    if not cleaned:
+        return None
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+async def extract_resume_features_llm(resume_text: str) -> dict:
+    """Hybrid extraction on the FastAPI loop. Heuristics run in a worker; Qwen does not."""
     resume_text = normalize_resume_text(resume_text)
-    fallback = ingest_resume(resume_text)
+    fallback = await asyncio.to_thread(ingest_resume, resume_text)
     full_extract = os.environ.get("RESUME_LLM_EXTRACT", "").strip().lower() in ("1", "true", "yes", "on")
     project_setting = os.environ.get("RESUME_PROJECT_LLM_EXTRACT", "1").strip().lower()
     project_extract = project_setting not in ("0", "false", "no", "off")
@@ -424,44 +437,41 @@ def extract_resume_features_llm(resume_text: str) -> dict:
             'Return only JSON: {"projects":["exact title 1","exact title 2"]}'
         )
 
+    from interviewer.adapters.registry import get_llm
+    from interviewer.config import settings as llm_settings
+    from interviewer.ports.llm import LLMRequest, LLMTask, Message
+
     try:
-        from interviewer.adapters.registry import get_llm
-        from interviewer.ports.llm import LLMRequest, LLMTask, Message
-
-        async def _extract():
-            return await get_llm().complete(
-                LLMRequest(
-                    task=LLMTask.EXTRACT,
-                    messages=[
-                        Message(
-                            role="system",
-                            content=(
-                                "You are a high-precision resume parser. Distinguish named projects from "
-                                "skills and description bullets. Copy titles from the supplied resume only."
-                            ),
+        result = await get_llm().complete(
+            LLMRequest(
+                task=LLMTask.EXTRACT,
+                messages=[
+                    Message(
+                        role="system",
+                        content=(
+                            "You are a high-precision resume parser. Distinguish named projects from "
+                            "skills and description bullets. Copy titles from the supplied resume only."
                         ),
-                        Message(role="user", content=prompt_text),
-                    ],
-                    temperature=0.0,
-                    max_tokens=600,
-                    deadline_ms=7000,
-                )
+                    ),
+                    Message(role="user", content=prompt_text),
+                ],
+                temperature=0.0,
+                max_tokens=600,
+                deadline_ms=llm_settings.llm.extract_deadline_ms,
             )
-
-        result = asyncio.run(_extract())
-        if not result.ok:
-            raise RuntimeError(result.detail or result.failure)
-        content = result.text
-        cleaned_json = re.sub(r"^```(?:json)?\s*", "", content.strip(), flags=re.IGNORECASE)
-        cleaned_json = re.sub(r"\s*```$", "", cleaned_json).strip()
-
-        parsed = json.loads(cleaned_json)
-        if isinstance(parsed, dict):
-            return ingest_resume(resume_text, parsed)
+        )
     except Exception as e:
-        _safe_log(f"[Resume LLM Extract Exception] {e}")
+        _safe_log(f"[Resume LLM Extract] transport exception: {e}")
+        return fallback
+    if not result.ok:
+        _safe_log(f"[Resume LLM Extract] {result.failure}: {result.detail or 'timeout/transport'}")
+        return fallback
 
-    return fallback
+    parsed = _parse_resume_llm_json(result.text)
+    if parsed is None:
+        _safe_log("[Resume LLM Extract] parse failure; using heuristic resume fields")
+        return fallback
+    return await asyncio.to_thread(ingest_resume, resume_text, parsed)
 
 
 def generate_system_prompt_from_features(features: dict) -> str:
@@ -553,12 +563,18 @@ def load_live_session(session_id: str) -> Optional[dict]:
     """Load a session by id, rehydrating per-session ResumeRAG from stored resume text."""
     if not session_id:
         return None
-    sess = INTERVIEW_SESSIONS.get(session_id)
-    if sess is None:
+    sess = None
+    if session_store.is_redis_active:
         sess = session_store.get_session(session_id)
+        if sess is not None:
+            INTERVIEW_SESSIONS[session_id] = sess
+    if sess is None:
+        sess = INTERVIEW_SESSIONS.get(session_id)
         if sess is None:
-            return None
-        INTERVIEW_SESSIONS[session_id] = sess
+            sess = session_store.get_session(session_id)
+            if sess is None:
+                return None
+            INTERVIEW_SESSIONS[session_id] = sess
     if sess.get("session_rag") is None:
         from rag_engine import ResumeRAG
         rag = _RUNTIME_RAG.get(session_id)
@@ -1074,6 +1090,7 @@ async def lifespan(_app: FastAPI):
     print("[Startup] RAG engine initialised.")
     from backend.store import interview_store
     print(f"[Startup] Durable store: {'ready at ' + interview_store.db_path if interview_store.is_available else 'UNAVAILABLE'}")
+    print(f"[Startup] Redis: {'connected' if session_store.is_redis_active else 'in-memory fallback'}")
     for i in range(GRADING_WORKERS):
         _BACKGROUND_TASKS.append(asyncio.create_task(_grading_worker(i + 1)))
     _BACKGROUND_TASKS.append(asyncio.create_task(_persist_worker()))
@@ -1937,7 +1954,8 @@ async def upload_resume(file: UploadFile = File(None), text_content: str = Form(
         if not raw_text.strip():
             return {"status": "error", "message": "Resume file contained no readable text. Try a text-based PDF or .txt/.md file."}
 
-        features = await asyncio.to_thread(extract_resume_features_llm, raw_text)
+        features = await extract_resume_features_llm(raw_text)
+        features = await asyncio.to_thread(sanitize_features, features, raw_text)
         features["raw_text"] = raw_text[:6000]
 
         resume_token = str(uuid.uuid4())

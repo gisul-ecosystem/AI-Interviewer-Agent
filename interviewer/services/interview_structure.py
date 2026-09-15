@@ -6,6 +6,8 @@
   Fundamentals   OOPs + DSA — 3 questions each, locked at resume upload
   Skills         3 questions each, locked at resume upload from bank + CV terms
   Closing        1 wrap-up turn
+
+The clock may drop leftover projects or extra CV skills. OOP and DSA still run.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ MAX_SKILLS = settings.interview.max_skills
 
 def planned_question_count(project_count: int, skill_count: int) -> int:
     """Opening is counted inside the first project's quota. Plus one closing turn."""
-    projects = max(1, min(MAX_PROJECTS, project_count)) if project_count else 1
+    projects = min(MAX_PROJECTS, max(0, project_count))
     skills = max(0, min(MAX_SKILLS + 2, skill_count))
     per_skill = max(3, QUESTIONS_PER_SKILL)
     return projects * QUESTIONS_PER_PROJECT + skills * per_skill + 1
@@ -39,7 +41,8 @@ def opening_greeting(
 ) -> str:
     mins = max(1, int(round((duration_seconds or DURATION_SECONDS) / 60)))
     who = name if name and name.lower() not in ("", "null", "the candidate") else "there"
-    proj = ", ".join((projects or [])[:2]) or "your resume projects"
+    proj_list = [p for p in (projects or []) if p and str(p).strip()]
+    proj = ", ".join(proj_list[:2])
     foundation = {
         "object-oriented programming",
         "data structures and algorithms",
@@ -54,10 +57,14 @@ def opening_greeting(
         if str(s).strip().lower() not in foundation and "object-oriented" not in str(s).lower()
     ]
     skill = ", ".join(cv_skills[:2]) or "the skills on your resume"
+    if proj:
+        agenda = f"{QUESTIONS_PER_PROJECT} questions on each of {proj}, then OOPs and DSA, and finish with {skill}"
+    else:
+        agenda = f"OOPs and DSA, and finish with {skill}"
     return (
         f"Hi {who}, I'm your interviewer for this {mins}-minute {role_label} conversation. "
-        f"We'll start with a short introduction, then {QUESTIONS_PER_PROJECT} questions on each of {proj}, "
-        f"then OOPs and DSA, and finish with {skill}. Please introduce yourself and the work you're proudest of."
+        f"We'll start with a short introduction, then {agenda}. "
+        f"Please introduce yourself and the work you're proudest of."
     )
 
 

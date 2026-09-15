@@ -7,6 +7,9 @@ Manages structured sequential stages for a 15-minute interview:
   4. CLOSING (wrap-up)
   5. COMPLETED (transcript saved, grading queued)
 
+The 15-minute clock may skip leftover projects or extra CV skills, but it must
+not close before Object-Oriented Programming and DSA have been asked.
+
 Difficulty level is strictly bounded between 1 and 3 (1=Foundational, 2=Intermediate, 3=Advanced).
 """
 
@@ -113,10 +116,8 @@ class InterviewFSM:
 
         weaknesses = self.state.setdefault("candidate_weaknesses", [])
 
-        # 1. Handle Skip / Don't Know / Topic Pivot — move on, don't punish.
+        # 1. Handle Skip / Don't Know / Topic Pivot — spend one quota slot, don't punish.
         if eval_result.get("is_skip") or intent in ("UNKNOWN_OR_SKIP", "TOPIC_CHANGE"):
-            if intent == "TOPIC_CHANGE":
-                pass
             self.state.setdefault("topic_scores", {})
         # 2. Handle Technical Answer Evaluation & Adaptive Difficulty within [1, 3]
         else:
@@ -137,19 +138,7 @@ class InterviewFSM:
         # Ensure difficulty stays strictly between 1 and 3
         self.state["difficulty_level"] = max(1, min(3, self.state.get("difficulty_level", 2)))
 
-        # 3. Policy Action Determination
-        if self.state["questions_remaining"] <= 0 or self.state["time_remaining_seconds"] <= 0:
-            action = "WRAP_UP"
-        elif eval_result.get("is_skip") or intent in ("UNKNOWN_OR_SKIP", "TOPIC_CHANGE"):
-            action = "PIVOT_TOPIC"
-        elif eval_result.get("depth") == "low" or eval_result.get("score", 0.6) < 0.5:
-            action = "PROBE_DEEPER"
-        else:
-            action = "CONTINUE"
-
-        self.state["action"] = action
-
-        # 4. Handle Structured Stage Transitions
+        # 3. Handle Structured Stage Transitions
         q_asked = self.state["questions_asked"]
         current_stage = self.state["stage"]
 
@@ -171,36 +160,59 @@ class InterviewFSM:
         wrap_after = max(30, quotas["wrap_up_seconds"])
         time_left = int(self.state.get("time_remaining_seconds") or 0)
         foundation_open = _foundation_incomplete(current_stage, self.state, skills)
-        # Skip and wrap-up must not jump past OOPs + DSA. Time hitting 0 still closes.
-        force_close = time_left <= 0
-        if not foundation_open:
-            if self.state["questions_remaining"] <= 0:
-                force_close = True
-            elif (
-                time_left <= wrap_after
-                and current_stage not in ("warmup", "closing", "completed")
-                and q_asked >= 2
-            ):
-                force_close = True
+        time_pressed = time_left <= 0 or (
+            time_left <= wrap_after
+            and current_stage not in ("warmup", "closing", "completed")
+            and q_asked >= 2
+        )
+        # 15-minute contract: wrap leftover projects/CV skills when time is gone,
+        # but never close before OOP + DSA have been asked.
+        if foundation_open:
+            force_close = False
+            cut_to_foundation = time_pressed
+        else:
+            force_close = time_pressed or self.state["questions_remaining"] <= 0
+            cut_to_foundation = False
 
-        # Phase 1: Warmup -> Project Deep-Dive (opener counts as project Q1)
+        if force_close:
+            action = "WRAP_UP"
+        elif eval_result.get("is_skip") or intent in ("UNKNOWN_OR_SKIP", "TOPIC_CHANGE"):
+            action = "PIVOT_TOPIC"
+        elif eval_result.get("depth") == "low" or eval_result.get("score", 0.6) < 0.5:
+            action = "PROBE_DEEPER"
+        else:
+            action = "CONTINUE"
+        self.state["action"] = action
+
+        def _enter_skills() -> None:
+            self.state["stage"] = "skills_assessment"
+            self.state["current_skill_index"] = 0
+            self.state["skill_question_count"] = 0
+            self.state["current_topic"] = f"Skill: {skills[0]}"
+
+        def _enter_closing() -> None:
+            self.state["stage"] = "closing"
+            self.state["current_topic"] = "Closing & Candidate Questions"
+
+        # Phase 1: Warmup -> Project Deep-Dive (or Skills if no projects)
         if current_stage == "warmup" and q_asked >= 1:
-            self.state["stage"] = "project_deep_dive"
-            self.state["current_project_index"] = 0
-            self.state["project_question_count"] = 1
-            p_name = projects[0] if projects else "a project on your resume"
-            self.state["current_topic"] = f"Project: {p_name}"
-            if force_close or self.state["project_question_count"] >= per_project:
-                if len(projects) > 1:
-                    self.state["current_project_index"] = 1
-                    self.state["project_question_count"] = 0
-                    self.state["current_topic"] = f"Project: {projects[1]}"
-                elif skills and not force_close:
-                    self.state["stage"] = "skills_assessment"
-                    self.state["current_topic"] = f"Skill: {skills[0]}"
+            if not projects:
+                if skills and not force_close:
+                    _enter_skills()
                 else:
-                    self.state["stage"] = "closing"
-                    self.state["current_topic"] = "Closing & Candidate Questions"
+                    _enter_closing()
+            else:
+                self.state["stage"] = "project_deep_dive"
+                self.state["current_project_index"] = 0
+                self.state["project_question_count"] = 0
+                self.state["current_topic"] = f"Project: {projects[0]}"
+                if cut_to_foundation and skills:
+                    _enter_skills()
+                elif force_close:
+                    if skills:
+                        _enter_skills()
+                    else:
+                        _enter_closing()
 
         # Phase 2: Projects (mandatory) then skills
         elif current_stage in ("project_deep_dive", "technical"):
@@ -209,41 +221,33 @@ class InterviewFSM:
             p_count = self.state.get("project_question_count", 0) + 1
             self.state["project_question_count"] = p_count
 
-            skipped = bool(eval_result.get("is_skip") or intent in ("UNKNOWN_OR_SKIP", "TOPIC_CHANGE"))
-            probe_deeper = self.state.get("action") == "PROBE_DEEPER" and not skipped
-            # A skip spends one question of this project's quota. It does not leave the project.
-            should_advance_project = (
-                force_close
-                or (p_count > per_project and not probe_deeper)
-            )
+            # Quota is a hard cap. PROBE_DEEPER only changes what we ask, not how many.
+            should_advance_project = force_close or cut_to_foundation or p_count >= per_project
 
             if should_advance_project:
                 self.state["project_thread"] = {}
-                if (not force_close) and p_idx + 1 < len(projects):
+                if cut_to_foundation and skills:
+                    _enter_skills()
+                elif (not force_close) and p_idx + 1 < len(projects):
                     self.state["current_project_index"] = p_idx + 1
                     self.state["project_question_count"] = 0
                     self.state["current_topic"] = f"Project: {projects[p_idx + 1]}"
                 elif skills and not force_close:
-                    self.state["stage"] = "skills_assessment"
-                    self.state["current_skill_index"] = 0
-                    self.state["skill_question_count"] = 0
-                    self.state["current_topic"] = f"Skill: {skills[0]}"
+                    _enter_skills()
                 else:
-                    self.state["stage"] = "closing"
-                    self.state["current_topic"] = "Closing & Candidate Questions"
+                    _enter_closing()
 
         # Phase 3: Skills (intersection only), then close
         elif current_stage in ("skills_assessment", "behavioral"):
             if not skills or force_close:
-                self.state["stage"] = "closing"
-                self.state["current_topic"] = "Closing & Candidate Questions"
+                _enter_closing()
             else:
                 self.state["stage"] = "skills_assessment"
                 s_idx = self.state.get("current_skill_index", 0)
                 s_count = self.state.get("skill_question_count", 0) + 1
                 self.state["skill_question_count"] = s_count
-                # A skip spends one question of this skill. Stay on OOP/DSA until the quota is done.
-                should_advance_skill = force_close or s_count >= per_skill
+                # A skip spends one question of this skill. Stay until the quota is done.
+                should_advance_skill = s_count >= per_skill
 
                 if should_advance_skill:
                     if s_idx + 1 < len(skills):
@@ -251,8 +255,7 @@ class InterviewFSM:
                         self.state["skill_question_count"] = 0
                         self.state["current_topic"] = f"Skill: {skills[s_idx + 1]}"
                     else:
-                        self.state["stage"] = "closing"
-                        self.state["current_topic"] = "Closing & Candidate Questions"
+                        _enter_closing()
 
         # Phase 4: candidate answered the wrap-up -> interview is done
         elif current_stage == "closing":

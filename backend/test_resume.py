@@ -290,6 +290,26 @@ MoleCheck - A CNN image classifier.
     print("[ok] hallucinated titles dropped", parsed["projects"])
 
 
+def test_llm_bullet_dump_is_not_kept_as_titles():
+    parsed = ingest_resume(
+        Path(ROOT / "resume.txt").read_text(encoding="utf-8"),
+        llm_fields={
+            "projects": [
+                "MoleCheck",
+                "Engineered a binary skin lesion classification model (Malignant vs. Benign)",
+                "dataset.",
+                "Implemented an end-to-end TensorFlow/Keras pipeline with data augmentation and",
+                "Evaluated performance using Sensitivity, Specificity, Precision-Recall curves",
+                "negatives.",
+                "Mental Health Predictor Live Demo",
+                "Performed exploratory data analysis including target distribution, correlation",
+            ]
+        },
+    )
+    assert parsed["projects"] == ["MoleCheck", "Mental Health Predictor"], parsed["projects"]
+    print("[ok] LLM bullet dump filtered", parsed["projects"])
+
+
 if __name__ == "__main__":
     test_multiline_projects_and_skills()
     test_long_description_becomes_title()
@@ -306,4 +326,5 @@ if __name__ == "__main__":
     test_two_column_skills_projects_header()
     test_live_demo_is_not_a_project()
     test_llm_hallucinated_titles_are_dropped()
+    test_llm_bullet_dump_is_not_kept_as_titles()
     print("[SUCCESS] Resume extraction checks passed.")

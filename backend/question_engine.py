@@ -19,7 +19,6 @@ import re
 
 from interviewer.services.resume import is_resume_metadata_title
 from backend.role_sift import normalize_track, sift_skills_for_role
-from backend.intent_engine import detect_requested_topic
 from backend.followup_engine import plan_followup, probe_from_answer, thin_answer
 
 
@@ -355,14 +354,8 @@ class QuestionEngine:
                 spoken_question=spoken,
             )
 
-        requested_topic = detect_requested_topic(candidate_answer, candidate_skills=skills)
-
         # ── 2. Warmup / Self Introduction ──────────────────────────────────────
         if stage == "warmup" or intent == "SELF_INTRO":
-            if not projects:
-                first_project = "a project on your resume"
-            else:
-                first_project = _cv_project_name(projects[0], projects)
             if interview_style == "behavioral":
                 opener = (
                     f"Thanks {c_name}. Tell me about a real situation involving hiring, conflict, "
@@ -374,6 +367,27 @@ class QuestionEngine:
                     difficulty=difficulty,
                     directive="TRANSITION: Thank them for the intro, then ask one STAR question. No coding.",
                 )
+            if not projects:
+                if skills:
+                    first_skill = skills[0]
+                    opener = (
+                        f"Thanks {c_name}. Let's dive straight into your technical background, starting with {first_skill}. "
+                        f"What problem did you solve using it, and which main tools or libraries did you rely on?"
+                    )
+                    topic = f"Skill: {first_skill}"
+                else:
+                    opener = (
+                        f"Thanks {c_name}. Could you walk me through the most technically challenging problem you've solved recently?"
+                    )
+                    topic = "Technical Background"
+                return self._scripted_ask(
+                    opener,
+                    topic=topic,
+                    difficulty=1,
+                    directive="TRANSITION: Close the intro in one short thanks, then ask the technical opener.",
+                )
+
+            first_project = _cv_project_name(projects[0], projects)
             opener = (
                 f"Thanks {c_name}. Let's start with your first project, {first_project}. "
                 f"What problem did it solve, and which main tools or models did you use?"
@@ -388,38 +402,11 @@ class QuestionEngine:
                 ),
             )
 
-        # ── 3. Explicit topic request ─────────────────────────────────────────
-        if requested_topic and intent in ("UNKNOWN_OR_SKIP", "TOPIC_CHANGE"):
-            spoken = (
-                f"Sure, let's switch to {requested_topic}. What's a real problem you solved with it, "
-                f"and how did you know it was working?"
-            )
-            return self._qwen_question(
-                candidate_answer=candidate_answer,
-                eval_res=eval_res,
-                candidate_dict=candidate_dict,
-                topic=requested_topic,
-                difficulty=difficulty,
-                focus="implementation",
-                project_thread={},
-                project_name="",
-                interview_style=interview_style,
-                llm_anchor=llm_anchor,
-                exclude_questions=exclude_questions,
-                seed_topic=requested_topic,
-                target_topic=requested_topic,
-                directive=(
-                    f"Candidate asked for {requested_topic}. Write ONE practical question on that topic "
-                    f"tied to something they just said. Do not pull a generic bank prompt."
-                ),
-                spoken_override=spoken,
-            )
+        # ── 3. Skip / topic-change — stay on the current project or skill quota ─
+        # A skip or "can we switch to X" spends one question of this quota.
+        # It must not hijack the spoken question onto a different topic.
 
-        # ── 4. Skip / Don't Know — stay on the current project or skill quota ─
-        # A skip spends one question. It must not jump past OOPs or DSA.
-        # Fall through so the next planned project probe or locked skill question is asked.
-
-        # ── 5. Phase 1: Project Deep-Dive ─────────────────────────────────────
+        # ── 4. Phase 1: Project Deep-Dive ─────────────────────────────────────
         if stage in ("project_deep_dive", "technical"):
             p_idx = fsm_state.get("current_project_index", 0)
             if not projects:
@@ -501,7 +488,7 @@ class QuestionEngine:
                 ),
             )
 
-        # ── 6. Phase 2: Skills Assessment (all 3 questions locked at upload) ──
+        # ── 5. Phase 2: Skills Assessment (all 3 questions locked at upload) ──
         if stage in ("skills_assessment", "behavioral"):
             if not skills:
                 spoken = (

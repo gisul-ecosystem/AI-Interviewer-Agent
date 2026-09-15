@@ -190,40 +190,66 @@ def test_low_time_still_asks_dsa():
     assert state["stage"] == "skills_assessment"
     assert "Data Structures" in (state.get("current_topic") or "")
     print("[ok] low remaining time still moves OOP -> DSA")
+
+
+def test_clock_zero_during_projects_still_asks_oop():
+    plan = build_interview_plan(
+        {"projects": ["MoleCheck", "Mental Health Predictor"], "skills": ["Python"], "bank_track": "aiml"}
+    )
     candidate = {
-        "projects": ["MoleCheck"],
-        "skills": ["Python", "PyTorch", "SQL"],
-        "interview_plan": {
-            "questions_per_project": 2,
-            "questions_per_skill": 1,
-            "wrap_up_seconds": 90,
-            "duration_seconds": 900,
-        },
+        "projects": ["MoleCheck", "Mental Health Predictor"],
+        "skills": plan["skill_names"],
+        "interview_plan": plan,
     }
     fsm = InterviewFSM({
         "stage": "project_deep_dive",
-        "questions_asked": 3,
-        "questions_remaining": 6,
-        "time_remaining_seconds": 40,
+        "questions_asked": 4,
+        "questions_remaining": 10,
+        "time_remaining_seconds": 0,
         "difficulty_level": 2,
         "current_project_index": 0,
-        "project_question_count": 1,
+        "project_question_count": 2,
+        "current_topic": "Project: MoleCheck",
     })
     state = fsm.update_from_evaluation(
         {"score": 0.8, "is_skip": False, "missing_concepts": []},
         "TECHNICAL_ANSWER",
         candidate,
     )
-    assert state["stage"] == "closing"
-    assert state.get("action") != "END_INTERVIEW"
-    finished = fsm.update_from_evaluation(
-        {"score": 0.5, "is_skip": False, "missing_concepts": []},
+    assert state["stage"] == "skills_assessment"
+    assert "Object-Oriented" in (state.get("current_topic") or "")
+    print("[ok] clock 0 during projects cuts to OOP instead of closing")
+
+
+def test_probe_deeper_does_not_extend_project_quota():
+    plan = build_interview_plan(
+        {"projects": ["MoleCheck", "Mental Health Predictor"], "skills": ["Python"], "bank_track": "aiml"}
+    )
+    candidate = {
+        "projects": ["MoleCheck", "Mental Health Predictor"],
+        "skills": plan["skill_names"],
+        "interview_plan": plan,
+    }
+    fsm = InterviewFSM({
+        "stage": "project_deep_dive",
+        "questions_asked": 4,
+        "questions_remaining": 12,
+        "time_remaining_seconds": 700,
+        "difficulty_level": 2,
+        "current_project_index": 0,
+        "project_question_count": 3,
+        "current_topic": "Project: MoleCheck",
+    })
+    state = fsm.update_from_evaluation(
+        {"score": 0.2, "depth": "low", "is_skip": False, "missing_concepts": ["regularization"]},
         "TECHNICAL_ANSWER",
         candidate,
     )
-    assert finished["stage"] == "completed"
-    assert finished["action"] == "END_INTERVIEW"
-    print("[ok] low time wraps to closing, then completes after candidate Q&A")
+    assert state["action"] == "PROBE_DEEPER"
+    assert state["stage"] == "project_deep_dive"
+    assert state["current_project_index"] == 1
+    assert "Mental Health" in (state.get("current_topic") or "")
+    print("[ok] weak last project answer still advances after the quota")
 
 
 if __name__ == "__main__":
@@ -233,4 +259,6 @@ if __name__ == "__main__":
     test_agenda_asks_oop_then_dsa()
     test_skip_does_not_leave_foundation_skill()
     test_low_time_still_asks_dsa()
+    test_clock_zero_during_projects_still_asks_oop()
+    test_probe_deeper_does_not_extend_project_quota()
     print("[SUCCESS] Interview structure checks passed.")

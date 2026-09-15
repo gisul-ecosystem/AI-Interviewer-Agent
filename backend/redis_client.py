@@ -49,7 +49,12 @@ class SessionStore:
             use_redis = os.getenv("USE_REDIS", "1").strip().lower() in ("1", "true", "yes", "on")
         if REDIS_AVAILABLE and use_redis:
             try:
-                client = redis.from_url(url, decode_responses=True, socket_connect_timeout=1.5)
+                client = redis.from_url(
+                    url,
+                    decode_responses=True,
+                    socket_connect_timeout=1.5,
+                    socket_timeout=1.5,
+                )
                 client.ping()
                 self.redis_client = client
                 safe_url = url.split("@")[-1] if "@" in url else url
@@ -84,14 +89,13 @@ class SessionStore:
                 logger.error(f"[SessionStore] Redis save_session error ({e}), storing in memory.")
 
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieve session dict by ID."""
+        """Retrieve session dict by ID. Redis first, then this process's memory."""
         if self.redis_client:
             try:
                 key = f"interview:session:{session_id}"
                 raw = self.redis_client.get(key)
                 if raw:
                     return json.loads(raw)
-                return None
             except Exception as e:
                 logger.error(f"[SessionStore] Redis get_session error ({e}), checking memory.")
         return self._memory_sessions.get(session_id)

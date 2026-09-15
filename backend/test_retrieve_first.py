@@ -208,6 +208,60 @@ def test_skip_does_not_repeat_same_question():
     print("[SUCCESS] Skip moves on instead of repeating the same question.")
 
 
+def test_topic_change_stays_on_planned_project():
+    from backend.evaluator import evaluate_turn_answer
+    from backend.intent_engine import detect_candidate_intent
+    from backend.interview_fsm import InterviewFSM
+    from backend.question_engine import question_engine
+    from backend.session_manager import create_session
+    from rag_engine import question_bank_rag
+
+    session = create_session({
+        "name": "Priya",
+        "skills": ["PyTorch", "Python"],
+        "projects": ["MoleCheck Image Classifier", "Credit Risk Scorer"],
+        "role": "AI / ML Engineer",
+    })
+    candidate = session["candidate"]
+    plan = session.get("interview_plan") or {}
+    state = {
+        "stage": "project_deep_dive",
+        "difficulty_level": 2,
+        "current_project_index": 0,
+        "project_question_count": 2,
+        "questions_already_asked": ["Let's start with your first project, MoleCheck Image Classifier."],
+        "action": "CONTINUE",
+        "current_topic": "Project: MoleCheck Image Classifier",
+    }
+    answer = "Can we switch to Python?"
+    intent = detect_candidate_intent(answer)
+    assert intent == "TOPIC_CHANGE"
+    eval_res = evaluate_turn_answer(answer, {"question": state["questions_already_asked"][0]}, intent)
+    fsm = InterviewFSM({
+        **state,
+        "questions_asked": 3,
+        "questions_remaining": 12,
+        "time_remaining_seconds": 700,
+    })
+    fsm_state = fsm.update_from_evaluation(eval_res, intent, candidate_dict=candidate)
+    dec = question_engine.decide(
+        candidate_answer=answer,
+        intent=intent,
+        fsm_state=fsm_state,
+        eval_res=eval_res,
+        candidate_dict=candidate,
+        question_bank_rag=question_bank_rag,
+        interview_plan=plan,
+    )
+    spoken = (dec.spoken_question or "").lower()
+    assert "molecheck" in spoken
+    assert "switch to python" not in spoken
+    assert "let's switch to" not in spoken
+    assert fsm_state["stage"] == "project_deep_dive"
+    assert fsm_state.get("current_project_index", 0) == 0
+    print("[SUCCESS] Topic-change skip stays on the planned project question.")
+
+
 def test_java_is_not_javascript():
     from backend.intent_engine import detect_requested_topic
     topic = detect_requested_topic(
@@ -329,7 +383,7 @@ def test_project_thread_climbs_one_ladder():
     assert any("overfit" in text.lower() or "augment" in text.lower() or "implement" in text.lower() for text in spoken), spoken
 
     last = plan_followup(
-        answers[-1],
+        "I trusted specificity because false negatives were dangerous.",
         eval_res={"depth": "med", "missing_concepts": [], "score": 0.65},
         candidate_dict=cv,
         topic="Project: MoleCheck",
@@ -339,11 +393,13 @@ def test_project_thread_climbs_one_ladder():
     )
     assert last["previous_probe"] == probes[-1]
     assert last["ladder_step"] == 4
+    assert "false negatives" in last["last_answer"]
+    assert "sensitivity" in (last.get("previous_answer") or last.get("previous_answer_excerpt") or "")
 
     prompt = build_interviewer_prompt(
         fsm_state={"stage": "project_deep_dive", "questions_already_asked": spoken},
         candidate_dict=cv,
-        candidate_answer=answers[-1],
+        candidate_answer="I trusted specificity because false negatives were dangerous.",
         question_decision=QuestionDecision(
             mode="GENERATE",
             seed_question=last["spoken_fallback"],
@@ -362,6 +418,10 @@ def test_project_thread_climbs_one_ladder():
     assert "last answer" in sys_msg.lower()
     assert "follow this" in sys_msg.lower() or "follow that answer" in sys_msg.lower()
     assert "dictionary definition" in sys_msg.lower()
+    assert "THEIR LAST ANSWER" in sys_msg
+    assert "PREVIOUS ANSWER ON THIS PROJECT" in sys_msg
+    assert "false negatives" in sys_msg
+    assert "sensitivity" in sys_msg
     prompt = build_interviewer_prompt(
         fsm_state={"stage": "project_deep_dive", "questions_already_asked": spoken},
         candidate_dict={
@@ -673,6 +733,7 @@ if __name__ == "__main__":
     test_retrieve_first_modes()
     test_grounded_followup_quality()
     test_skip_does_not_repeat_same_question()
+    test_topic_change_stays_on_planned_project()
     test_java_is_not_javascript()
     test_qwen_phrasing_keeps_policy()
     test_project_thread_climbs_one_ladder()
