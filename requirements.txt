@@ -11,6 +11,10 @@ httpx>=0.27,<1
 # Hot session cache. The app falls back to an in-process dict if unreachable.
 redis>=5.0.0
 
+# LiveKit join tokens + RTC agent (Phase 2 AI participant).
+livekit-api>=1.0.0
+livekit>=1.0.0
+
 # STT: Groq whisper-large-v3-turbo by default (STT_API_KEY / GROQ_API_KEY).
 # Local fallback: STT_PROVIDER=whisper
 faster-whisper>=1.1

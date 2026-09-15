@@ -20,6 +20,9 @@ let isRecording = false;
 let audioContext = null;
 let mediaStream = null;
 let scriptProcessor = null;
+let livekitRoom = null;
+let livekitLocalTracks = [];
+let livekitAgentReady = false;
 let audioWorkletNode = null;
 let ws = null;
 let currentTranscript = '';
@@ -50,13 +53,17 @@ let ttsGeneration = 0;
 // Silence-based auto follow-up
 let silenceTimer = null;
 let lastTranscriptSnapshot = '';
-const SILENCE_THRESHOLD_MS = 8000;  // thinking pauses are normal; don't cut a live answer
-const MIC_QUIET_MS = 6500;
-const MIN_AUTO_SUBMIT_WORDS = 12;
+const SILENCE_THRESHOLD_MS = 2800;
+const STT_PREVIEW_MS = 1000;
+const MIC_QUIET_MS = 3500;
+const MIN_AUTO_SUBMIT_WORDS = 5;
 const VOICE_RMS_THRESHOLD = 0.012;
-const STT_JUNK_RE = /^(thank you\.?|thanks\.?|thank you for watching\.?|thanks for watching\.?|bye\.?|you\.?|the\.?|a\.?)$/i;
+const STT_JUNK_RE = /^(thank you\.?|thanks\.?|thank you for watching\.?|thanks for watching\.?|bye\.?|you\.?|the\.?|a\.?|okay\.?|ok\.?|hmm\.?|uh\.?|um\.?)$/i;
 let questionStreamOpen = false;
 let lastMicVoiceAt = 0;
+let listenOpenedAt = 0;
+let pendingFinalTranscript = null;
+let sttPreviewSent = false;
 let didSpeakChunk = false;
 const VOICE_CMD_RE = /\b(pass|skip|idk|dunno|repeat|pardon|don'?t know|dont know|not sure|next question|didn'?t hear|can you repeat|could you repeat)\b/i;
 function isVoiceCommand(text) {
@@ -97,7 +104,7 @@ const BARGE_IN_MIN_FRAMES = 12;
 const BARGE_IN_ABS_FLOOR = 0.08;
 const BARGE_IN_NOISE_MULT = 6.0;
 const BARGE_IN_GRACE_MS = 2500;
-const LISTENING_WINDOW_MS = 2000;
+const LISTENING_WINDOW_MS = 800;
 let noiseFloor = 0.005;
 let bargeInFrames = 0;
 let currentAudioUrl = null;
@@ -434,7 +441,7 @@ async function startRecording() {
       toggleMicBtn.classList.add('recording');
       micBtnText.innerText = 'Stop Interview';
       if (generateQuestionBtn) generateQuestionBtn.disabled = true;
-      setStatus('listening', 'Listening (Live ASR)');
+      setStatus('listening', currentMode === 'interview' ? 'Interview starting…' : 'Listening (Live ASR)');
       visualizerOverlay.classList.add('hidden');
       startTimer();
 
@@ -462,27 +469,7 @@ async function startRecording() {
 
     ws.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'reset_ack') {
-          console.log('[STT Relay] Clean STT session acknowledged for turn.');
-          sttReady = true;
-          if (sttResetSafetyTimer) { clearTimeout(sttResetSafetyTimer); sttResetSafetyTimer = null; }
-          return;
-        }
-        if (data.type === 'transcript') {
-          // Failsafe: Only force-unlock if stuck without audio playing for over 35s
-          if (isAiSpeaking && !questionStreamOpen && aiSpeakingStartTime > 0 && (Date.now() - aiSpeakingStartTime > 45000)) {
-            if (!currentAudioPlayer || currentAudioPlayer.paused || currentAudioPlayer.ended) {
-              console.warn('[STT Listener Failsafe] Force unlocking stuck AI speaking state.');
-              onAiFinishedSpeaking(true);
-            }
-          }
-          if (followUpInProgress || isAiSpeaking || isEchoCooldown || questionStreamOpen || !micGateOpen()) return;
-          updateTranscript(data.text);
-        } else if (data.type === 'error') {
-          console.error('[STT Error]', data.message);
-          setStatus('error', 'Captions glitched — keep speaking, reconnecting');
-        }
+        handleSttSocketMessage(JSON.parse(event.data));
       } catch (err) {
         console.error('[WS] Message parse error:', err);
       }
@@ -507,6 +494,84 @@ async function startRecording() {
 
 
 // ─── Pre-roll Buffer & Barge-in Detection ────────────────────────────────────
+
+function waitForFinalTranscript(timeoutMs = 14000) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pendingFinalTranscript = null;
+      resolve(currentTranscript.trim());
+    }, timeoutMs);
+    pendingFinalTranscript = (text) => {
+      clearTimeout(timer);
+      pendingFinalTranscript = null;
+      resolve((text || '').trim());
+    };
+  });
+}
+
+function applyFinalTranscript(text) {
+  const cleaned = stripLeadingSttJunk(text || '').trim();
+  if (!cleaned || isSttJunk(cleaned)) {
+    currentTranscript = '';
+    return '';
+  }
+  currentTranscript = cleaned;
+  shouldClearTranscriptOnNextSpeech = false;
+  liveText.innerText = cleaned;
+  emptyTranscript.style.display = 'none';
+  const words = cleaned.split(/\s+/).filter(Boolean);
+  wordCount.innerText = `${words.length} words`;
+  if (generateQuestionBtn && currentMode === 'interview') generateQuestionBtn.disabled = words.length === 0;
+  transcriptBox.scrollTop = transcriptBox.scrollHeight;
+  return cleaned;
+}
+
+function handleSttSocketMessage(data) {
+  if (!data || !data.type) return;
+  if (data.type === 'reset_ack') {
+    sttReady = true;
+    if (sttResetSafetyTimer) { clearTimeout(sttResetSafetyTimer); sttResetSafetyTimer = null; }
+    return;
+  }
+  if (data.type === 'error') {
+    console.error('[STT Error]', data.message);
+    setStatus('error', 'Captions glitched — keep speaking, reconnecting');
+    return;
+  }
+  if (data.type !== 'transcript') return;
+
+  if (isAiSpeaking && !questionStreamOpen && aiSpeakingStartTime > 0 && (Date.now() - aiSpeakingStartTime > 45000)) {
+    if (!currentAudioPlayer || currentAudioPlayer.paused || currentAudioPlayer.ended) {
+      console.warn('[STT Listener Failsafe] Force unlocking stuck AI speaking state.');
+      onAiFinishedSpeaking(true);
+    }
+  }
+
+  if (data.final) {
+    const shown = applyFinalTranscript(data.text);
+    if (pendingFinalTranscript) pendingFinalTranscript(shown);
+    return;
+  }
+  if (currentMode === 'interview') return;
+  if (followUpInProgress || isAiSpeaking || isEchoCooldown || questionStreamOpen || !micGateOpen()) return;
+  updateTranscript(data.text);
+}
+
+function flushPendingPcm() {
+  if (!ws || ws.readyState !== WebSocket.OPEN || resampleBuffer.length === 0) return;
+  const padded = new Float32Array(CHUNK_SAMPLES);
+  padded.set(resampleBuffer.subarray(0, Math.min(resampleBuffer.length, CHUNK_SAMPLES)));
+  try { ws.send(float32ToPCM16(padded).buffer); } catch (_) { }
+  resampleBuffer = new Float32Array(0);
+}
+
+function setTranscriptPlaceholder(message) {
+  const p = emptyTranscript && emptyTranscript.querySelector('p');
+  if (p && message) p.textContent = message;
+  liveText.innerText = '';
+  if (emptyTranscript) emptyTranscript.style.display = 'flex';
+  wordCount.innerText = '0 words';
+}
 
 /** Recycle the upstream STT stream and keep the mic gate shut until it is back. */
 function sendSttReset() {
@@ -544,9 +609,7 @@ function scheduleSttReconnect() {
       };
       ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data);
-          if (data.type === 'reset_ack') { sttReady = true; return; }
-          if (data.type === 'transcript' && micGateOpen()) updateTranscript(data.text);
+          handleSttSocketMessage(JSON.parse(event.data));
         } catch (_) { }
       };
       ws.onerror = () => setStatus('error', 'Caption reconnect failed');
@@ -654,15 +717,157 @@ function handleBargeIn() {
 
 // ─── Audio Capture & Continuous Seamless Resampling ──────────────────────────
 
-async function initAudioCapture() {
-  mediaStream = await navigator.mediaDevices.getUserMedia({
+function livekitSdk() {
+  return window.LivekitClient || null;
+}
+
+async function disconnectLiveKit() {
+  const tracks = livekitLocalTracks.splice(0);
+  tracks.forEach((track) => {
+    try { track.stop(); } catch (_) { }
+    try { track.detach(); } catch (_) { }
+  });
+  if (livekitRoom) {
+    try { await livekitRoom.disconnect(); } catch (_) { }
+    livekitRoom = null;
+  }
+  const stage = document.getElementById('livekitStage');
+  if (stage) stage.hidden = true;
+  ['candidateVideo', 'remoteVideo'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.srcObject = null;
+  });
+  const host = document.getElementById('aiLivekitAudioHost');
+  if (host) host.innerHTML = '';
+  livekitAgentReady = false;
+  if (activeInterviewSessionId) {
+    try {
+      fetch('/api/livekit-agent-stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: activeInterviewSessionId }),
+      });
+    } catch (_) { }
+  }
+}
+
+async function connectLiveKitMic() {
+  if (currentMode !== 'interview' || !activeInterviewSessionId) return null;
+  const LK = livekitSdk();
+
+  await disconnectLiveKit();
+
+  const rawStream = await navigator.mediaDevices.getUserMedia({
     audio: {
       channelCount: 1,
       echoCancellation: true,
       noiseSuppression: true,
       autoGainControl: true,
-    }
+    },
+    video: { facingMode: 'user' },
   });
+
+  if (!LK) return rawStream;
+
+  try {
+    const response = await fetch('/api/livekit-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: activeInterviewSessionId }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `LiveKit token HTTP ${response.status}`);
+    }
+    const data = await response.json();
+    if (!data.token || !data.url) throw new Error('LiveKit token response was incomplete');
+
+    const room = new LK.Room();
+    livekitRoom = room;
+
+    const markAgent = (participant) => {
+      const id = String(participant?.identity || '');
+      if (id.startsWith('ai-interviewer')) livekitAgentReady = true;
+    };
+    const attachRemote = (track, participant) => {
+      markAgent(participant);
+      if (track.kind === 'video') {
+        const remote = document.getElementById('remoteVideo');
+        if (remote) track.attach(remote);
+      }
+      if (track.kind === 'audio' && String(participant?.identity || '').startsWith('ai-interviewer')) {
+        const host = document.getElementById('aiLivekitAudioHost');
+        const el = track.attach();
+        el.autoplay = true;
+        el.setAttribute('playsinline', 'true');
+        if (host) {
+          host.innerHTML = '';
+          host.appendChild(el);
+        }
+      }
+    };
+
+    room.on(LK.RoomEvent.ParticipantConnected, markAgent);
+    room.on(LK.RoomEvent.TrackSubscribed, (track, _pub, participant) => attachRemote(track, participant));
+    room.on(LK.RoomEvent.DataReceived, (payload) => {
+      try {
+        const msg = JSON.parse(new TextDecoder().decode(payload));
+        if (msg.type === 'agent_ready') livekitAgentReady = true;
+      } catch (_) { }
+    });
+
+    await room.connect(data.url, data.token);
+    room.remoteParticipants.forEach((p) => markAgent(p));
+
+    const audioMedia = rawStream.getAudioTracks()[0];
+    const videoMedia = rawStream.getVideoTracks()[0];
+    if (audioMedia) {
+      await room.localParticipant.publishTrack(audioMedia, {
+        source: LK.Track.Source.Microphone,
+      });
+    }
+    if (videoMedia) {
+      await room.localParticipant.publishTrack(videoMedia, {
+        source: LK.Track.Source.Camera,
+      });
+      const localVideo = document.getElementById('candidateVideo');
+      if (localVideo) {
+        localVideo.srcObject = new MediaStream([videoMedia]);
+        localVideo.muted = true;
+        localVideo.setAttribute('playsinline', 'true');
+        localVideo.play().catch(() => { });
+      }
+    }
+    if (data.phase === 2) livekitAgentReady = true;
+
+    const stage = document.getElementById('livekitStage');
+    if (stage) stage.hidden = false;
+    console.log(`[LiveKit] joined ${data.room} as ${data.identity} (raw mic → Whisper)`);
+  } catch (exc) {
+    console.warn('[LiveKit] room join failed; Whisper still uses the local mic:', exc);
+  }
+
+  return rawStream;
+}
+
+async function initAudioCapture() {
+  try {
+    mediaStream = await connectLiveKitMic();
+  } catch (exc) {
+    console.warn('[LiveKit] falling back to local mic:', exc);
+    await disconnectLiveKit();
+    mediaStream = null;
+  }
+  if (!mediaStream) {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      }
+    });
+  }
 
   audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
@@ -715,10 +920,23 @@ async function initAudioCapture() {
       return;
     }
 
+    // Drop the click / TTS echo that lands in the first half-second of a turn.
+    if (listenOpenedAt && Date.now() - listenOpenedAt < 500) {
+      resetPreroll();
+      return;
+    }
+
     let energy = 0;
     for (let i = 0; i < resampled.length; i += 8) energy += resampled[i] * resampled[i];
     const rms = Math.sqrt(energy / Math.max(1, resampled.length / 8));
-    if (rms >= VOICE_RMS_THRESHOLD) lastMicVoiceAt = Date.now();
+    if (rms >= VOICE_RMS_THRESHOLD) {
+      lastMicVoiceAt = Date.now();
+      sttPreviewSent = false;
+      if (turnPhase === 'listening') {
+        candidateHasSpokenInTurn = true;
+        if (generateQuestionBtn && currentMode === 'interview') generateQuestionBtn.disabled = false;
+      }
+    }
 
     // Gate is open: prepend anything captured while it was shut.
     const pending = drainPreroll();
@@ -732,6 +950,12 @@ async function initAudioCapture() {
     while (resampleBuffer.length >= CHUNK_SAMPLES) {
       const chunkFloat = resampleBuffer.subarray(0, CHUNK_SAMPLES);
       resampleBuffer = resampleBuffer.slice(CHUNK_SAMPLES);
+      let chunkEnergy = 0;
+      for (let i = 0; i < chunkFloat.length; i += 8) chunkEnergy += chunkFloat[i] * chunkFloat[i];
+      const chunkRms = Math.sqrt(chunkEnergy / Math.max(1, chunkFloat.length / 8));
+      const hangover = lastMicVoiceAt && (Date.now() - lastMicVoiceAt) < 350;
+      // Silence in Whisper's window is what hallucinates "thank you for watching".
+      if (chunkRms < VOICE_RMS_THRESHOLD && !hangover) continue;
       const pcm16 = float32ToPCM16(chunkFloat);
       try {
         ws.send(pcm16.buffer);
@@ -807,6 +1031,7 @@ function stopRecording(preserveStatus = false) {
   resamplePhase = 0;
   resetPreroll();
   stopAiPlayback();
+  void disconnectLiveKit();
 
   if (scriptProcessor) {
     scriptProcessor.disconnect();
@@ -842,9 +1067,22 @@ function stopRecording(preserveStatus = false) {
 
 // ─── Transcript ───────────────────────────────────────────────────────────────
 
+function isSttJunk(text) {
+  const t = (text || '').trim();
+  if (!t) return true;
+  if (STT_JUNK_RE.test(t)) return true;
+  const words = t.split(/\s+/).filter(Boolean);
+  if (words.length <= 10 && /thank you for watching|thanks for watching|please subscribe|like and subscribe/i.test(t)) return true;
+  return false;
+}
+
+function stripLeadingSttJunk(text) {
+  return (text || '').replace(/^(thank you for watching[.!]?\s*|thanks for watching[.!]?\s*|please subscribe[.!]?\s*|like and subscribe[.!]?\s*)+/i, '').trim();
+}
+
 function mergeStreamingTranscript(previous, incoming) {
-  const prev = (previous || '').trim();
-  const next = (incoming || '').trim();
+  const prev = isSttJunk(previous) ? '' : (previous || '').trim();
+  const next = stripLeadingSttJunk(incoming || '');
   if (!next) return prev;
   if (!prev) return next;
   if (next === prev) return next;
@@ -870,7 +1108,9 @@ function mergeStreamingTranscript(previous, incoming) {
 
 function updateTranscript(text) {
   if (!text || isAiSpeaking || followUpInProgress || isEchoCooldown || questionStreamOpen) return;
-  if (STT_JUNK_RE.test(text.trim())) return;
+  if (listenOpenedAt && Date.now() - listenOpenedAt < 1500) return;
+  const incoming = candidateHasSpokenInTurn ? text : stripLeadingSttJunk(text);
+  if (!incoming || (isSttJunk(incoming) && !candidateHasSpokenInTurn)) return;
 
   // Clear previous candidate answer display only when candidate starts speaking new turn
   if (shouldClearTranscriptOnNextSpeech) {
@@ -880,7 +1120,8 @@ function updateTranscript(text) {
     emptyTranscript.style.display = 'none';
   }
 
-  const trimmed = text.trim();
+  const trimmed = incoming.trim();
+  if (isSttJunk(trimmed) && !candidateHasSpokenInTurn) return;
   const words = trimmed.split(/\s+/).filter(Boolean);
   const fillerSet = new Set([
     'yeah', 'yes', 'yep', 'yup', 'ok', 'okay', 'sure', 'right',
@@ -898,7 +1139,7 @@ function updateTranscript(text) {
   if (trimmed && trimmed !== currentTranscript.trim()) {
     lastTranscriptChangeTime = Date.now();
   }
-  currentTranscript = mergeStreamingTranscript(currentTranscript, text);
+  currentTranscript = mergeStreamingTranscript(currentTranscript, incoming);
   liveText.innerText = currentTranscript;
   emptyTranscript.style.display = 'none';
   const keptWords = currentTranscript.split(/\s+/).filter(Boolean);
@@ -1044,41 +1285,22 @@ function startSilencePolling() {
     }
 
     const now = Date.now();
-    const currentText = currentTranscript.trim();
-    if (!currentText || STT_JUNK_RE.test(currentText)) return;
-
-    const words = currentText.split(/\s+/).filter(Boolean);
-    const isShortOrRepeat = isVoiceCommand(currentText);
-    if (words.length < 2 && !isShortOrRepeat) return;
-
-    // Do NOT auto-trigger follow-up if candidate only said thinking/acknowledgment filler words
-    const fillerWords = new Set([
-      'yeah', 'yes', 'yep', 'yup', 'ok', 'okay', 'sure', 'right',
-      'uh', 'um', 'uhhuh', 'hmm', 'alright', 'fine', 'so', 'well',
-      'like', 'actually', 'basically'
-    ]);
-    const nonFillerWords = words.filter(w => !fillerWords.has(w.toLowerCase().replace(/[^a-z]/g, '')));
-    if (!isShortOrRepeat && (nonFillerWords.length < 2 || words.every(w => fillerWords.has(w.toLowerCase().replace(/[^a-z]/g, ''))))) {
-      return;
+    if (!lastMicVoiceAt) return;
+    const micQuietMs = now - lastMicVoiceAt;
+    if (
+      micQuietMs >= STT_PREVIEW_MS
+      && !sttPreviewSent
+      && ws
+      && ws.readyState === WebSocket.OPEN
+    ) {
+      sttPreviewSent = true;
+      flushPendingPcm();
+      try { ws.send(JSON.stringify({ action: 'preview' })); } catch (_) { }
     }
+    if (micQuietMs < SILENCE_THRESHOLD_MS) return;
 
-    // Mic energy is the source of truth. Caption text can freeze while you are
-    // still talking (Whisper re-sends the same rolling window).
-    const micQuietMs = now - (lastMicVoiceAt || now);
-    const captionIdleMs = now - lastTranscriptChangeTime;
-    if (!isShortOrRepeat && micQuietMs < MIC_QUIET_MS) return;
-
-    let requiredSilence = SILENCE_THRESHOLD_MS;
-    if (isShortOrRepeat) {
-      requiredSilence = 1400;
-    } else if (words.length < MIN_AUTO_SUBMIT_WORDS) {
-      requiredSilence = 9000;
-    }
-
-    if (captionIdleMs >= requiredSilence && (isShortOrRepeat || micQuietMs >= MIC_QUIET_MS)) {
-      console.log(`[Silence Trigger] Candidate finished speaking (mic quiet ${micQuietMs}ms, captions idle ${captionIdleMs}ms, ${words.length} words)`);
-      triggerAutoFollowUp();
-    }
+    console.log(`[Silence Trigger] Candidate finished speaking (mic quiet ${micQuietMs}ms)`);
+    triggerAutoFollowUp();
   }, 350);
 }
 
@@ -1113,33 +1335,52 @@ function cleanAiText(text) {
 }
 
 async function triggerAutoFollowUp(overrideAnswer = null) {
-  let candidateAnswer = overrideAnswer ? overrideAnswer.trim() : currentTranscript.trim();
-  if (interviewEnded || followUpInProgress || isFinalizingUtterance || isAiSpeaking || !candidateAnswer) return;
+  if (interviewEnded || followUpInProgress || isFinalizingUtterance || isAiSpeaking) return;
 
   const fillerSet = new Set([
     'yeah', 'yes', 'yep', 'yup', 'ok', 'okay', 'sure', 'right',
     'uh', 'um', 'uhhuh', 'hmm', 'alright', 'fine', 'so', 'well',
     'like', 'actually', 'basically'
   ]);
-  const isExplicitCmd = isVoiceCommand(candidateAnswer);
+
+  let candidateAnswer = overrideAnswer ? overrideAnswer.trim() : '';
 
   if (!overrideAnswer) {
-    const wList = candidateAnswer.split(/\s+/).filter(Boolean);
-    const nonFillers = wList.filter(w => !fillerSet.has(w.toLowerCase().replace(/[^a-z]/g, '')));
-    if (!isExplicitCmd && (nonFillers.length < 2 || wList.every(w => fillerSet.has(w.toLowerCase().replace(/[^a-z]/g, ''))))) {
-      return;
-    }
-
     isFinalizingUtterance = true;
+    setTurnPhase('processing');
+    setStatus('thinking', 'Transcribing your answer...');
     try {
-      if (!isExplicitCmd && ws && ws.readyState === WebSocket.OPEN) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        flushPendingPcm();
+        const wait = waitForFinalTranscript(14000);
         ws.send(JSON.stringify({ action: 'flush' }));
-        await new Promise((resolve) => setTimeout(resolve, 1100));
-        candidateAnswer = currentTranscript.trim() || candidateAnswer;
+        candidateAnswer = await wait;
+      } else {
+        candidateAnswer = currentTranscript.trim();
       }
     } finally {
       isFinalizingUtterance = false;
     }
+  }
+
+  candidateAnswer = (candidateAnswer || '').trim();
+  const isExplicitCmd = isVoiceCommand(candidateAnswer);
+  if (!candidateAnswer || isSttJunk(candidateAnswer)) {
+    setStatus('listening', 'Did not catch that — please say it again');
+    setTurnPhase('listening');
+    lastMicVoiceAt = Date.now();
+    if (isRecording) startSilencePolling();
+    return;
+  }
+
+  const wList = candidateAnswer.split(/\s+/).filter(Boolean);
+  const nonFillers = wList.filter(w => !fillerSet.has(w.toLowerCase().replace(/[^a-z]/g, '')));
+  if (!isExplicitCmd && (nonFillers.length < 2 || wList.every(w => fillerSet.has(w.toLowerCase().replace(/[^a-z]/g, ''))))) {
+    setStatus('listening', 'Keep going — pause when your answer is complete');
+    setTurnPhase('listening');
+    lastMicVoiceAt = Date.now();
+    if (isRecording) startSilencePolling();
+    return;
   }
 
   followUpInProgress = true;
@@ -1152,9 +1393,7 @@ async function triggerAutoFollowUp(overrideAnswer = null) {
 
   sendSttReset();
 
-  if (!overrideAnswer) {
-    currentTranscript = '';
-  }
+  currentTranscript = candidateAnswer;
   lastTranscriptChangeTime = Date.now();
 
   emptyTranscript.style.display = 'none';
@@ -1337,14 +1576,14 @@ function onAiFinishedSpeaking(force = false) {
     candidateHasSpokenInTurn = false;
     shouldClearTranscriptOnNextSpeech = true;
     currentTranscript = '';
-    liveText.innerText = '';
-    emptyTranscript.style.display = 'flex';
-    wordCount.innerText = '0 words';
+    setTranscriptPlaceholder('Listening… your answer appears when you pause.');
     lastTranscriptChangeTime = Date.now();
-    lastMicVoiceAt = Date.now();
+    lastMicVoiceAt = 0;
+    listenOpenedAt = Date.now();
+    sttPreviewSent = false;
     if (isRecording) {
       if (generateQuestionBtn) generateQuestionBtn.disabled = false;
-      setStatus('listening', 'Your turn — take your time, then pause or tap I’m done');
+      setStatus('listening', 'Your turn — pause when finished; next question is automatic');
       setTurnPhase('listening');
       startSilencePolling();
     } else {
@@ -1375,6 +1614,22 @@ async function speakText(rawText) {
   let playbackFailsafe = null;
   const clearAllFailsafes = () => {
     if (playbackFailsafe) { clearTimeout(playbackFailsafe); playbackFailsafe = null; }
+  };
+
+  const finishSpeak = () => {
+    clearAllFailsafes();
+    if (generation !== ttsGeneration) return;
+    if (speakQueue.length) {
+      playQueuedSpeak();
+    } else if (questionStreamOpen) {
+      ttsBusy = false;
+      isAiSpeaking = true;
+      followUpInProgress = true;
+      setStatus('speaking', 'Finishing the question…');
+    } else {
+      ttsBusy = false;
+      onAiFinishedSpeaking(true);
+    }
   };
 
   try {

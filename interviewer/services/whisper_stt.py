@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import re
 import threading
 import time
 import wave
@@ -27,10 +28,11 @@ logger = logging.getLogger("Interview.WhisperSTT")
 
 SAMPLE_RATE = 16_000
 BYTES_PER_SAMPLE = 2
-WINDOW_SECONDS = 28
+WINDOW_SECONDS = 10
 # Groq free tiers are ~20 req/min; don't caption every 700ms.
 MIN_INFER_BYTES = SAMPLE_RATE * BYTES_PER_SAMPLE * 2
-MAX_BUFFER_BYTES = SAMPLE_RATE * BYTES_PER_SAMPLE * 30
+MAX_BUFFER_SECONDS = 90
+MAX_BUFFER_BYTES = SAMPLE_RATE * BYTES_PER_SAMPLE * MAX_BUFFER_SECONDS
 
 _engine: Optional["Transcriber"] = None
 _engine_lock = threading.Lock()
@@ -58,18 +60,81 @@ def _pcm_is_silent(pcm: bytes, rms_floor: float = 220.0) -> bool:
     return rms < rms_floor
 
 
+_JUNK_EXACT = {
+    "thank you",
+    "thanks",
+    "thank you for watching",
+    "thanks for watching",
+    "you",
+    "bye",
+    "the",
+    "a",
+    "okay",
+    "ok",
+    "hmm",
+    "uh",
+    "um",
+    "please subscribe",
+    "like and subscribe",
+}
+_JUNK_PHRASES = (
+    "thank you for watching",
+    "thanks for watching",
+    "please subscribe",
+    "like and subscribe",
+)
+
+
 def _clean_caption(text: str) -> str:
     t = (text or "").strip()
-    low = t.lower().rstrip(".! ")
-    if low in {"thank you", "thanks", "thank you for watching", "thanks for watching", "you", "bye", "the"}:
+    if not t:
         return ""
+    low = t.lower().rstrip(".!?, ")
+    if low in _JUNK_EXACT:
+        return ""
+    for phrase in _JUNK_PHRASES:
+        if low.startswith(phrase):
+            rest = t[len(phrase) :].lstrip(" .!?,")
+            return _clean_caption(rest)
     return t
+
+
+def _dedupe_transcript(text: str) -> str:
+    """Drop consecutive sentence / clause repeats Whisper sometimes emits on long audio."""
+    t = (text or "").strip()
+    if not t:
+        return ""
+    sentences = re.split(r"(?<=[.!?])\s+", t)
+    out: list[str] = []
+    for sent in sentences:
+        s = sent.strip()
+        if not s:
+            continue
+        key = re.sub(r"\s+", " ", s.lower()).rstrip(".!?")
+        if out:
+            prev_key = re.sub(r"\s+", " ", out[-1].lower()).rstrip(".!?")
+            if key == prev_key:
+                continue
+            if len(key) > 24 and key in prev_key:
+                continue
+            if len(prev_key) > 24 and prev_key in key:
+                out[-1] = s
+                continue
+        out.append(s)
+    merged = " ".join(out)
+    words = merged.split()
+    n = len(words)
+    if n >= 12:
+        for size in range(n // 2, 5, -1):
+            if [w.lower() for w in words[:size]] == [w.lower() for w in words[size : size * 2]]:
+                return " ".join(words[:size] + words[size * 2 :]).strip()
+    return merged
 
 
 def merge_captions(previous: str, incoming: str) -> str:
     """Keep a growing utterance when Whisper only re-decodes a sliding window."""
-    prev = (previous or "").strip()
-    nxt = (incoming or "").strip()
+    prev = _clean_caption(previous or "")
+    nxt = _clean_caption(incoming or "")
     if not nxt:
         return prev
     if not prev:
@@ -147,7 +212,7 @@ class ApiWhisperEngine:
                         self.url,
                         files={"file": ("speech.wav", wav, "audio/wav")},
                         data=data,
-                        timeout=20,
+                        timeout=40,
                     )
                 if response.status_code == 429:
                     wait_s = 1.5 * (attempt + 1)
@@ -299,4 +364,20 @@ class WhisperStreamSession:
         text = await asyncio.to_thread(engine.transcribe_pcm16, pcm, self.prompt)
         if text:
             self.last_text = merge_captions(self.last_text, text)
+        return self.last_text
+
+    async def transcribe_full(self, reuse_if_unchanged: bool = False) -> str:
+        """One Whisper pass over the whole utterance. No sliding-window merge."""
+        async with self._infer_gate:
+            with self._buf_lock:
+                if reuse_if_unchanged and not self._pending and self.last_text:
+                    return self.last_text
+                pcm = bytes(self._buf)
+                self._pending = False
+            if len(pcm) < SAMPLE_RATE * BYTES_PER_SAMPLE // 2:
+                self.last_text = ""
+                return ""
+        engine = get_whisper_engine()
+        text = await asyncio.to_thread(engine.transcribe_pcm16, pcm, self.prompt)
+        self.last_text = _dedupe_transcript(_clean_caption(text or ""))
         return self.last_text
