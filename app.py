@@ -1091,6 +1091,8 @@ async def lifespan(_app: FastAPI):
     from backend.store import interview_store
     print(f"[Startup] Durable store: {'ready at ' + interview_store.db_path if interview_store.is_available else 'UNAVAILABLE'}")
     print(f"[Startup] Redis: {'connected' if session_store.is_redis_active else 'in-memory fallback'}")
+    from interviewer.services.livekit_tokens import is_livekit_configured
+    print(f"[Startup] LiveKit: {'configured' if is_livekit_configured() else 'off (STT will use local mic)'}")
     for i in range(GRADING_WORKERS):
         _BACKGROUND_TASKS.append(asyncio.create_task(_grading_worker(i + 1)))
     _BACKGROUND_TASKS.append(asyncio.create_task(_persist_worker()))
@@ -1119,6 +1121,12 @@ async def lifespan(_app: FastAPI):
             except (asyncio.CancelledError, Exception):
                 pass
         _BACKGROUND_TASKS.clear()
+        try:
+            from interviewer.services.livekit_room_agent import _AGENTS, stop_interview_agent
+            for sid in list(_AGENTS.keys()):
+                await stop_interview_agent(sid)
+        except Exception:
+            pass
         from interviewer.adapters.registry import close_llm
         await close_llm()
         print("[Shutdown] Background workers stopped.")
@@ -1183,6 +1191,7 @@ async def api_ready():
     from backend.store import interview_store
     from rag_engine import question_bank_rag
     from interviewer.config import settings as ready_cfg
+    from interviewer.services.livekit_tokens import is_livekit_configured
     return {
         "status": "ok",
         "store": bool(interview_store.is_available),
@@ -1190,7 +1199,77 @@ async def api_ready():
         "question_bank": bool(getattr(question_bank_rag, "is_ready", False)),
         "stt": ready_cfg.speech.stt_provider,
         "stt_key": bool(ready_cfg.speech.stt_api_key) if ready_cfg.speech.stt_provider in ("whisper_api", "groq", "api") else True,
+        "livekit": is_livekit_configured(),
+        "livekit_phase": 2 if is_livekit_configured() else 0,
     }
+
+
+@app.post("/api/livekit-token")
+async def livekit_token(payload: dict = None):
+    """Join token for the STT/camera room. One session_id = one LiveKit room."""
+    from interviewer.services.livekit_tokens import is_livekit_configured, mint_candidate_token
+
+    payload = payload or {}
+    session_id = str(payload.get("session_id") or "").strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    if not is_livekit_configured():
+        raise HTTPException(status_code=503, detail="LiveKit is not configured")
+    session = load_live_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Interview session not found")
+    try:
+        cand = session.get("candidate") or {}
+        from interviewer.services.livekit_room_agent import ensure_interview_agent
+        from interviewer.services.resume import is_resume_metadata_title
+        prompt_bits = []
+        for proj in cand.get("projects") or []:
+            title = str(proj or "").strip()
+            if title and len(title.split()) <= 8 and not is_resume_metadata_title(title):
+                prompt_bits.append(title)
+        prompt_bits.extend(list(cand.get("skills") or [])[:8])
+        await ensure_interview_agent(session_id, whisper_prompt=" ".join(str(p) for p in prompt_bits if p)[:220])
+        return {
+            "status": "ok",
+            "phase": 2,
+            **mint_candidate_token(session_id, identity_name=str(cand.get("name") or "Candidate")),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not mint LiveKit token: {exc}") from exc
+
+
+@app.post("/api/livekit-speak")
+async def livekit_speak(payload: dict = None):
+    """Phase 2: Kokoro into the LiveKit room (not the browser <audio> element)."""
+    payload = payload or {}
+    session_id = str(payload.get("session_id") or "").strip()
+    text = str(payload.get("text") or "").strip()
+    if not session_id or not text:
+        raise HTTPException(status_code=400, detail="session_id and text are required")
+    from interviewer.config import settings as speech_settings
+    from interviewer.services.livekit_room_agent import get_interview_agent
+    agent = get_interview_agent(session_id)
+    if agent is None or not agent.is_ready:
+        raise HTTPException(status_code=503, detail="AI interviewer is not in the LiveKit room")
+    voice = payload.get("voice") or speech_settings.speech.tts_voice or "af_heart"
+    if not isinstance(voice, str) or not voice.strip() or len(voice) > 50:
+        voice = "af_heart"
+    try:
+        await agent.speak(text, voice)
+        return {"status": "ok"}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"LiveKit Kokoro failed: {exc}") from exc
+
+
+@app.post("/api/livekit-agent-stop")
+async def livekit_agent_stop(payload: dict = None):
+    payload = payload or {}
+    session_id = str(payload.get("session_id") or "").strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    from interviewer.services.livekit_room_agent import stop_interview_agent
+    await stop_interview_agent(session_id)
+    return {"status": "ok"}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -2114,10 +2193,11 @@ async def _whisper_live_interview(client_ws: WebSocket, mode: str, session_id: O
 
     stream = WhisperStreamSession(prompt=" ".join(str(p) for p in prompt_bits if p)[:220])
     stop = asyncio.Event()
+    live_captions = mode != "interview"
 
     async def caption_loop():
         from interviewer.services.whisper_stt import uses_whisper_api
-        tick = 3.2 if uses_whisper_api() else 0.7
+        tick = 2.4 if uses_whisper_api() else 0.7
         while not stop.is_set():
             try:
                 await asyncio.wait_for(stop.wait(), timeout=tick)
@@ -2130,7 +2210,7 @@ async def _whisper_live_interview(client_ws: WebSocket, mode: str, session_id: O
                 raw = await stream.transcribe_latest()
                 text = _apply_stt_lexicon(raw, mode, live_session)
                 if text:
-                    await client_ws.send_json({"type": "transcript", "text": text})
+                    await client_ws.send_json({"type": "transcript", "text": text, "final": False})
             except Exception as exc:
                 print(f"[Whisper STT] caption error: {exc}")
                 try:
@@ -2138,7 +2218,7 @@ async def _whisper_live_interview(client_ws: WebSocket, mode: str, session_id: O
                 except Exception:
                     pass
 
-    pump = asyncio.create_task(caption_loop())
+    pump = asyncio.create_task(caption_loop()) if live_captions else None
     try:
         while True:
             data = await client_ws.receive()
@@ -2156,11 +2236,19 @@ async def _whisper_live_interview(client_ws: WebSocket, mode: str, session_id: O
                 if action == "reset":
                     stream.reset()
                     await client_ws.send_json({"type": "reset_ack"})
+                elif action == "preview":
+                    try:
+                        await stream.transcribe_full()
+                    except Exception as exc:
+                        print(f"[Whisper STT] preview error: {exc}")
                 elif action == "flush":
-                    raw = await stream.transcribe_latest(force=True)
-                    text = _apply_stt_lexicon(raw, mode, live_session)
-                    if text:
-                        await client_ws.send_json({"type": "transcript", "text": text})
+                    try:
+                        raw = await stream.transcribe_full(reuse_if_unchanged=True)
+                        text = _apply_stt_lexicon(raw, mode, live_session)
+                    except Exception as exc:
+                        print(f"[Whisper STT] flush error: {exc}")
+                        text = ""
+                    await client_ws.send_json({"type": "transcript", "text": text or "", "final": True})
                 elif action == "stop":
                     break
     except (WebSocketDisconnect, asyncio.CancelledError):
@@ -2173,7 +2261,8 @@ async def _whisper_live_interview(client_ws: WebSocket, mode: str, session_id: O
             pass
     finally:
         stop.set()
-        pump.cancel()
+        if pump is not None:
+            pump.cancel()
         try:
             await client_ws.close()
         except Exception:

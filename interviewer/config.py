@@ -25,7 +25,7 @@ def _load_dotenv() -> None:
         key, _, value = line.partition("=")
         key = key.strip()
         value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
+        if key:
             os.environ[key] = value
 
 
@@ -105,6 +105,10 @@ class SpeechSettings:
     tts_voice: str = field(default_factory=lambda: _env("TTS_VOICE", "af_heart"))
     tts_deadline_ms: int = field(default_factory=lambda: _env_int("TTS_DEADLINE_MS", 20000))
     sample_rate: int = field(default_factory=lambda: _env_int("AUDIO_SAMPLE_RATE", 16_000))
+    livekit_url: str = field(default_factory=lambda: _env("LIVEKIT_URL", ""))
+    livekit_api_key: str = field(default_factory=lambda: _env("LIVEKIT_API_KEY", ""))
+    livekit_api_secret: str = field(default_factory=lambda: _env("LIVEKIT_API_SECRET", ""))
+    livekit_http_url: str = field(default_factory=lambda: _env("LIVEKIT_HTTP_URL", ""))
 
 
 @dataclass(frozen=True)

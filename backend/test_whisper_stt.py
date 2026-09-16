@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from interviewer.services.whisper_stt import (
     _clean_caption,
+    _dedupe_transcript,
     _pcm16_to_wav,
     _pcm_is_silent,
     _api_model_name,
@@ -22,6 +23,9 @@ def test_clean_caption():
     assert _clean_caption("bye!") == ""
     assert _clean_caption("I worked on Python and FastAPI.") == "I worked on Python and FastAPI."
     assert _clean_caption("   ") == ""
+    assert _clean_caption("okay") == ""
+    assert _clean_caption("Thank you for watching. I built MoleCheck in PyTorch.") == "I built MoleCheck in PyTorch."
+    assert _clean_caption("Please subscribe") == ""
 
 
 def test_api_model_name():
@@ -92,3 +96,12 @@ def test_merge_captions_keeps_start_of_answer():
     assert "data augmentation" in merged.lower()
     assert merge_captions(start, "using TensorFlow and Keras") == start
     print("[ok] caption merge keeps the start of the answer")
+
+
+def test_dedupe_transcript_drops_repeated_sentence():
+    once = "I built MoleCheck in PyTorch."
+    assert _dedupe_transcript(f"{once} {once}") == once
+    doubled = "this is a longer answer about my project this is a longer answer about my project"
+    out = _dedupe_transcript(doubled)
+    assert out.lower().count("this is a longer") == 1
+    assert _dedupe_transcript("I used FastAPI for routing.") == "I used FastAPI for routing."

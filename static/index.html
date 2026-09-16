@@ -140,6 +140,18 @@
           </div>
         </div>
 
+        <div class="livekit-stage" id="livekitStage" hidden>
+          <div class="livekit-tile">
+            <video id="candidateVideo" autoplay playsinline muted></video>
+            <span class="livekit-label">You</span>
+          </div>
+          <div class="livekit-tile livekit-tile-remote">
+            <video id="remoteVideo" autoplay playsinline></video>
+            <span class="livekit-label">Interviewer</span>
+          </div>
+        </div>
+        <div id="aiLivekitAudioHost" hidden></div>
+
         <!-- Audio Visualizer Canvas -->
         <div class="visualizer-container">
           <canvas id="waveformCanvas" width="600" height="90"></canvas>
@@ -148,14 +160,14 @@
           </div>
         </div>
 
-        <!-- Live Streaming Transcript Box -->
+        <!-- Answer transcript (shown after you pause) -->
         <div class="transcript-box" id="transcriptBox">
           <div class="empty-state" id="emptyTranscript">
             <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
               <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
               <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
             </svg>
-            <p>Your spoken words will appear here in real-time as you speak...</p>
+            <p>Your answer will appear here after you finish speaking.</p>
           </div>
           <p class="live-text" id="liveText"></p>
         </div>
@@ -196,8 +208,8 @@
             <span id="micBtnText">Start Interview</span>
           </button>
 
-          <!-- Lets candidates finish a turn immediately; silence remains a fallback. -->
-          <button class="btn btn-accent btn-lg" id="generateQuestionBtn" disabled>
+          <!-- Backup only — the next question fires on a pause. -->
+          <button class="btn btn-ghost" id="generateQuestionBtn" disabled>
             <span class="btn-icon">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
@@ -225,7 +237,7 @@
               <span>Send Answer ➔</span>
             </button>
           </div>
-          <span style="font-size: 0.75rem; color: #94a3b8; margin-top: 4px; display: block;">Speak your full answer. The next question waits until you pause for a few seconds or tap “I'm done speaking”.</span>
+          <span style="font-size: 0.75rem; color: #94a3b8; margin-top: 4px; display: block;">Speak your full answer, then pause. The next question starts automatically. The button is only a backup.</span>
         </div>
       </section>
 
@@ -436,6 +448,7 @@
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.15.8/dist/livekit-client.umd.min.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>
