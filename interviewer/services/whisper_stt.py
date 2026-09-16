@@ -60,6 +60,23 @@ def _pcm_is_silent(pcm: bytes, rms_floor: float = 220.0) -> bool:
     return rms < rms_floor
 
 
+def _trim_trailing_silence(pcm: bytes, chunk_ms: int = 100, rms_floor: float = 200.0) -> bytes:
+    """Strip trailing silent frames so Whisper receives clean speech without padding latency."""
+    chunk_bytes = (SAMPLE_RATE * BYTES_PER_SAMPLE * chunk_ms) // 1000
+    if len(pcm) <= chunk_bytes * 2:
+        return pcm
+    end = len(pcm)
+    while end > chunk_bytes * 2:
+        chunk = pcm[end - chunk_bytes : end]
+        audio = np.frombuffer(chunk, dtype=np.int16)
+        rms = float(np.sqrt(np.mean(audio.astype(np.float32) ** 2)))
+        if rms >= rms_floor:
+            end = min(len(pcm), end + chunk_bytes * 2)
+            break
+        end -= chunk_bytes
+    return pcm[:end]
+
+
 _JUNK_EXACT = {
     "thank you",
     "thanks",
@@ -372,7 +389,7 @@ class WhisperStreamSession:
             with self._buf_lock:
                 if reuse_if_unchanged and not self._pending and self.last_text:
                     return self.last_text
-                pcm = bytes(self._buf)
+                pcm = _trim_trailing_silence(bytes(self._buf))
                 self._pending = False
             if len(pcm) < SAMPLE_RATE * BYTES_PER_SAMPLE // 2:
                 self.last_text = ""

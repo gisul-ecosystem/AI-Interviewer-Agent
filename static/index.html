@@ -194,6 +194,20 @@
           <p class="final-transcript-text" id="finalTranscriptText"></p>
         </div>
 
+        <!-- Voice Activity & Automatic Silence Countdown Indicator -->
+        <div id="vadIndicator" class="vad-indicator hidden">
+          <div class="vad-pill">
+            <div class="vad-pill-left">
+              <span id="vadDot" class="vad-dot"></span>
+              <span id="vadStatusText">Listening to your answer…</span>
+            </div>
+            <span id="vadCountdownBadge" class="vad-countdown-badge">Auto-submitting in 2.2s</span>
+          </div>
+          <div class="vad-progress-track">
+            <div id="vadProgressBar" class="vad-progress-fill"></div>
+          </div>
+        </div>
+
         <!-- Audio Controls -->
         <div class="controls-bar">
           <button class="btn btn-primary btn-lg" id="toggleMicBtn">
@@ -449,6 +463,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.15.8/dist/livekit-client.umd.min.js"></script>
-  <script src="/static/app.js?v=stt-socket-2"></script>
+  <script src="/static/app.js?v=vad-auto-1"></script>
 </body>
 </html>

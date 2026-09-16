@@ -50,14 +50,22 @@ let speakChain = Promise.resolve();
 let ttsBusy = false;
 let ttsGeneration = 0;
 
-// Silence-based auto follow-up
+// Silence-based auto follow-up & Voice Activity Detection (VAD)
 let silenceTimer = null;
 let lastTranscriptSnapshot = '';
-const SILENCE_THRESHOLD_MS = 2800;
-const MIC_QUIET_MS = 3500;
 const MIN_AUTO_SUBMIT_WORDS = 5;
-const VOICE_RMS_THRESHOLD = 0.012;
 const STT_JUNK_RE = /^(thank you\.?|thanks\.?|thank you for watching\.?|thanks for watching\.?|bye\.?|you\.?|the\.?|a\.?|okay\.?|ok\.?|hmm\.?|uh\.?|um\.?)$/i;
+
+// Adaptive VAD parameters
+let noiseFloor = 0.005;
+let isUserSpeakingNow = false;
+let speechHangoverUntil = 0;
+let lastSpeechEndedAt = 0;
+const VAD_ONSET_RATIO = 2.4;
+const VAD_CONTINUE_RATIO = 1.6;
+const VAD_MIN_THRESHOLD = 0.007;
+const VAD_MAX_THRESHOLD = 0.045;
+let activeDynamicThreshold = 0.012;
 let questionStreamOpen = false;
 let lastMicVoiceAt = 0;
 let listenOpenedAt = 0;
@@ -110,7 +118,6 @@ const BARGE_IN_ABS_FLOOR = 0.08;
 const BARGE_IN_NOISE_MULT = 6.0;
 const BARGE_IN_GRACE_MS = 2500;
 const LISTENING_WINDOW_MS = 800;
-let noiseFloor = 0.005;
 let bargeInFrames = 0;
 let currentAudioUrl = null;
 
@@ -133,6 +140,74 @@ const statusText = document.getElementById('statusText');
 const modeInterviewBtn = document.getElementById('modeInterviewBtn');
 const modeGeneralBtn = document.getElementById('modeGeneralBtn');
 const roleSelect = document.getElementById('roleSelect');
+const vadIndicator = document.getElementById('vadIndicator');
+const vadDot = document.getElementById('vadDot');
+const vadStatusText = document.getElementById('vadStatusText');
+const vadCountdownBadge = document.getElementById('vadCountdownBadge');
+const vadProgressBar = document.getElementById('vadProgressBar');
+
+function showVadCountdown(remainingMs, progressPct) {
+  if (!vadIndicator) return;
+  vadIndicator.classList.remove('hidden');
+  if (vadDot) vadDot.className = 'vad-dot silence';
+  if (vadStatusText) vadStatusText.innerText = 'Pause detected — finalizing answer';
+  if (vadCountdownBadge) {
+    const secs = (remainingMs / 1000).toFixed(1);
+    vadCountdownBadge.innerText = `Auto-submitting in ${secs}s`;
+    vadCountdownBadge.classList.remove('submitting');
+  }
+  if (vadProgressBar) vadProgressBar.style.width = `${progressPct}%`;
+}
+
+function updateVadStatus(state, message) {
+  if (!vadIndicator) return;
+  if (turnPhase !== 'listening' || !isRecording) {
+    vadIndicator.classList.add('hidden');
+    return;
+  }
+  vadIndicator.classList.remove('hidden');
+  if (state === 'speaking') {
+    if (vadDot) vadDot.className = 'vad-dot speaking';
+    if (vadStatusText) vadStatusText.innerText = message || 'Listening — speaking…';
+    if (vadCountdownBadge) {
+      vadCountdownBadge.innerText = 'Speaking';
+      vadCountdownBadge.classList.remove('submitting');
+    }
+    if (vadProgressBar) vadProgressBar.style.width = '0%';
+  } else if (state === 'waiting') {
+    if (vadDot) vadDot.className = 'vad-dot';
+    if (vadStatusText) vadStatusText.innerText = message || 'Ready — speak your answer aloud';
+    if (vadCountdownBadge) {
+      vadCountdownBadge.innerText = 'Ready';
+      vadCountdownBadge.classList.remove('submitting');
+    }
+    if (vadProgressBar) vadProgressBar.style.width = '0%';
+  } else if (state === 'submitting') {
+    if (vadDot) vadDot.className = 'vad-dot speaking';
+    if (vadStatusText) vadStatusText.innerText = 'Submitting answer…';
+    if (vadCountdownBadge) {
+      vadCountdownBadge.innerText = 'Submitting…';
+      vadCountdownBadge.classList.add('submitting');
+    }
+    if (vadProgressBar) vadProgressBar.style.width = '100%';
+  }
+}
+
+function hideVadCountdown() {
+  if (vadProgressBar) vadProgressBar.style.width = '0%';
+  if (turnPhase !== 'listening' || !isRecording) {
+    if (vadIndicator) vadIndicator.classList.add('hidden');
+  }
+}
+
+function getTargetSilenceDuration() {
+  const text = (currentTranscript || '').trim();
+  const words = text ? text.split(/\s+/).filter(Boolean).length : 0;
+  if (isVoiceCommand(text)) return 900;
+  if (words <= 4) return 3000;
+  if (words >= 25) return 1900;
+  return 2300;
+}
 const jobDescriptionInput = document.getElementById('jobDescriptionInput');
 if (jobDescriptionInput) {
   try {
@@ -981,11 +1056,42 @@ async function initAudioCapture() {
     let energy = 0;
     for (let i = 0; i < resampled.length; i += 8) energy += resampled[i] * resampled[i];
     const rms = Math.sqrt(energy / Math.max(1, resampled.length / 8));
-    if (rms >= VOICE_RMS_THRESHOLD) {
-      lastMicVoiceAt = Date.now();
-      if (turnPhase === 'listening') {
-        candidateHasSpokenInTurn = true;
-        if (generateQuestionBtn && currentMode === 'interview') generateQuestionBtn.disabled = false;
+
+    const now = Date.now();
+
+    // ── Adaptive Noise Floor Tracking ──
+    // When candidate is not speaking, track background ambient noise level
+    if (!isUserSpeakingNow) {
+      if (rms < noiseFloor) {
+        noiseFloor = 0.88 * noiseFloor + 0.12 * rms;
+      } else {
+        noiseFloor = 0.98 * noiseFloor + 0.02 * rms;
+      }
+      noiseFloor = Math.max(0.002, Math.min(0.035, noiseFloor));
+    }
+
+    // Dynamic thresholds with hysteresis
+    activeDynamicThreshold = Math.max(VAD_MIN_THRESHOLD, Math.min(VAD_MAX_THRESHOLD, noiseFloor * VAD_ONSET_RATIO + 0.004));
+    const continueThreshold = Math.max(VAD_MIN_THRESHOLD * 0.8, noiseFloor * VAD_CONTINUE_RATIO + 0.002);
+
+    const isSpeechFrame = isUserSpeakingNow ? (rms >= continueThreshold) : (rms >= activeDynamicThreshold);
+
+    if (isSpeechFrame) {
+      speechHangoverUntil = now + 350;
+      lastMicVoiceAt = now;
+      if (!isUserSpeakingNow) {
+        isUserSpeakingNow = true;
+        if (turnPhase === 'listening') {
+          candidateHasSpokenInTurn = true;
+          if (generateQuestionBtn && currentMode === 'interview') generateQuestionBtn.disabled = false;
+          hideVadCountdown();
+          updateVadStatus('speaking', 'Listening — candidate speaking…');
+        }
+      }
+    } else if (now >= speechHangoverUntil) {
+      if (isUserSpeakingNow) {
+        isUserSpeakingNow = false;
+        lastSpeechEndedAt = now;
       }
     }
 
@@ -1004,9 +1110,9 @@ async function initAudioCapture() {
       let chunkEnergy = 0;
       for (let i = 0; i < chunkFloat.length; i += 8) chunkEnergy += chunkFloat[i] * chunkFloat[i];
       const chunkRms = Math.sqrt(chunkEnergy / Math.max(1, chunkFloat.length / 8));
-      const hangover = lastMicVoiceAt && (Date.now() - lastMicVoiceAt) < 350;
+      const hangover = lastMicVoiceAt && (now - lastMicVoiceAt) < 400;
       // Silence in Whisper's window is what hallucinates "thank you for watching".
-      if (chunkRms < VOICE_RMS_THRESHOLD && !hangover) continue;
+      if (chunkRms < continueThreshold && !hangover) continue;
       const pcm16 = float32ToPCM16(chunkFloat);
       try {
         ws.send(pcm16.buffer);
@@ -1064,6 +1170,10 @@ function stopRecording(preserveStatus = false) {
   sttUserStopped = true;
   sttHasOpened = false;
   isRecording = false;
+  isUserSpeakingNow = false;
+  speechHangoverUntil = 0;
+  hideVadCountdown();
+  if (vadIndicator) vadIndicator.classList.add('hidden');
   clearSttReconnectTimers();
   clearSilenceTimer();
   toggleMicBtn.classList.remove('recording');
@@ -1326,25 +1436,53 @@ function startSilencePolling() {
   lastTranscriptChangeTime = Date.now();
 
   silencePollInterval = setInterval(() => {
-    if (!isRecording || followUpInProgress || isFinalizingUtterance || isAiSpeaking || isEchoCooldown || questionStreamOpen || currentMode !== 'interview' || interviewEnded) return;
+    if (!isRecording || followUpInProgress || isFinalizingUtterance || isAiSpeaking || isEchoCooldown || questionStreamOpen || currentMode !== 'interview' || interviewEnded) {
+      hideVadCountdown();
+      return;
+    }
 
     // CRITICAL: NEVER auto-trigger follow-up if candidate has not actively spoken in this turn!
     if (!candidateHasSpokenInTurn) {
+      updateVadStatus('waiting', 'Ready — speak your answer aloud');
+      return;
+    }
+
+    if (isUserSpeakingNow) {
+      updateVadStatus('speaking', 'Listening — candidate speaking…');
       return;
     }
 
     const now = Date.now();
     if (!lastMicVoiceAt) return;
     const micQuietMs = now - lastMicVoiceAt;
-    if (micQuietMs < SILENCE_THRESHOLD_MS) return;
+    const targetSilenceMs = getTargetSilenceDuration();
 
-    console.log(`[Silence Trigger] Candidate finished speaking (mic quiet ${micQuietMs}ms)`);
-    triggerAutoFollowUp();
-  }, 350);
+    // Natural brief pause between words (< 450ms): don't show countdown yet
+    if (micQuietMs < 450) {
+      updateVadStatus('speaking', 'Listening…');
+      return;
+    }
+
+    // Candidate has paused for > 450ms: show visual countdown!
+    const remainingMs = Math.max(0, targetSilenceMs - micQuietMs);
+    const progressPct = Math.min(100, Math.round(((micQuietMs - 450) / Math.max(1, targetSilenceMs - 450)) * 100));
+    showVadCountdown(remainingMs, progressPct);
+
+    if (micQuietMs >= targetSilenceMs) {
+      console.log(`[Auto-VAD] Silence threshold reached (${micQuietMs}ms >= ${targetSilenceMs}ms). Auto-submitting.`);
+      updateVadStatus('submitting');
+      stopSilencePolling();
+      triggerAutoFollowUp();
+    }
+  }, 100);
 }
 
 function stopSilencePolling() {
-  if (silencePollInterval) { clearInterval(silencePollInterval); silencePollInterval = null; }
+  if (silencePollInterval) {
+    clearInterval(silencePollInterval);
+    silencePollInterval = null;
+  }
+  hideVadCountdown();
 }
 
 function clearSilenceTimer() {
@@ -1597,6 +1735,10 @@ function onAiFinishedSpeaking(force = false) {
   sendSttReset();
   currentTranscript = '';
   candidateHasSpokenInTurn = false;
+  isUserSpeakingNow = false;
+  speechHangoverUntil = 0;
+  hideVadCountdown();
+  if (vadIndicator) vadIndicator.classList.add('hidden');
   isEchoCooldown = true;
   followUpInProgress = true;
   isAiSpeaking = false;
@@ -1613,6 +1755,8 @@ function onAiFinishedSpeaking(force = false) {
     followUpInProgress = false;
     isEchoCooldown = false;
     candidateHasSpokenInTurn = false;
+    isUserSpeakingNow = false;
+    speechHangoverUntil = 0;
     shouldClearTranscriptOnNextSpeech = true;
     currentTranscript = '';
     setTranscriptPlaceholder('Listening… your answer appears when you pause.');
@@ -1623,6 +1767,7 @@ function onAiFinishedSpeaking(force = false) {
       if (generateQuestionBtn) generateQuestionBtn.disabled = false;
       setStatus('listening', 'Your turn — pause when finished; next question is automatic');
       setTurnPhase('listening');
+      updateVadStatus('waiting', 'Ready — speak your answer aloud');
       startSilencePolling();
     } else {
       setStatus('', 'Ready');
