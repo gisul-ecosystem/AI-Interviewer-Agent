@@ -193,3 +193,55 @@ def test_skill_filter_word_boundary():
     lower_skills = [s.lower() for s in skills]
     assert any("development" in s for s in lower_skills)
     assert any("experience" in s for s in lower_skills)
+
+
+def test_closed_question_prefix_ready_for_tts():
+    import app
+
+    assert app._closed_question_prefix("What about dropout") == ""
+    assert app._closed_question_prefix("What about dropout?") == "What about dropout?"
+    assert app._closed_question_prefix("Hello. What about dropout") == "Hello."
+
+
+@pytest.mark.anyio
+async def test_qwen_sentence_is_yielded_before_stream_ends():
+    """First complete gated question must reach Kokoro without waiting for [DONE]."""
+    import app
+
+    class Dec:
+        mode = "GENERATE"
+        followup_spec = {
+            "spoken_fallback": "Fallback about PyTorch dropout and MoleCheck validation?",
+            "project_name": "MoleCheck",
+            "anchor_term": "dropout",
+            "mentioned_terms": ["dropout"],
+        }
+        spoken_question = "Fallback about PyTorch dropout and MoleCheck validation?"
+        seed_question = "Fallback about PyTorch dropout and MoleCheck validation?"
+        scripted = False
+        skill_kind = None
+        target_topic = "project:MoleCheck"
+        seed_topic = ""
+        block_projects = []
+
+        def wants_qwen_phrasing(self, intent=""):
+            return True
+
+    class FakeLLM:
+        async def stream(self, request):
+            yield "What did you change about dropout "
+            yield "in MoleCheck when validation dropped?"
+            yield " Then one more clause"
+
+    with patch("interviewer.adapters.registry.get_llm", return_value=FakeLLM()):
+        out = [
+            s
+            async for s in app._iter_phrased_sentences(
+                Dec(),
+                "TECHNICAL_ANSWER",
+                "Fallback about PyTorch dropout and MoleCheck validation?",
+                {"messages": [{"role": "user", "content": "x"}]},
+            )
+        ]
+    assert out
+    assert "dropout" in out[0].lower()
